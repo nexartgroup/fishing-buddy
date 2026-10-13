@@ -8,23 +8,43 @@
   schaltete ihn EIN. Das AddOn liest jetzt die Serverantworten, fragt den Bot
   per "nc ?" und schaltet nur bei Bedarf; ausgeschaltet wird am Ende nur, was
   es selbst eingeschaltet hat, und erst nachdem die Strategie zurueckgenommen
-  wurde.
-- NEU: Pruefung. Nach dem Setzen zeigt "nc ?", ob "master fishing" beim Bot
-  angekommen ist; sonst bis zu drei Versuche und eine klare Meldung
-  (Verweigerung durch den Server, Bot antwortet nicht, Fluestern gesperrt ...).
-  Im Betrieb fragt die Kontrolle bei Stillstand nach, statt blind zu senden.
-- NEU: "nc -mount" waehrend des Angelns (Option), Warnung im Sattel.
-- NEU: Zusammenspiel mit Botpad (Hold/Release ab Botpad 1.3) und AutoTravel
+  wurde. Ein von aussen ausgeschalteter Bot wird nicht wieder eingeschaltet,
+  und mitten in einer AutoTravel-Reise, die den Selbstbot braucht, bleibt er an.
+- FIX: Der Bot behaelt je KI-Takt nur den letzten "nc"-Befehl. Alle nc-Zeilen
+  eines Blocks gehen deshalb als ein einziger Befehl hinaus ("nc ?,-mount,
+  +master fishing,?"). Die beiden "?" lassen den Bot seine Strategieliste vor
+  und nach der Aenderung nennen: das ist die Pruefung.
+- FIX: Wartezeiten nach dem Serververhalten. Ein frisch eingeschalteter
+  Selbstbot hoert etwa 10 s lang nicht auf Chatbefehle, ein angelnder Bot
+  schlaeft waehrend der Wartezeit auf den Schwimmer. Antworten werden bis zu
+  25 s (Start) / 20 s (Kontrolle) abgewartet, verspaetete zaehlen trotzdem; die
+  Rueckname beim Stoppen wird alle 3 s wiederholt, bis sie bestaetigt ist.
+- FIX: Abmelden oder /reload waehrend des Angelns: die Rueckname geht hinaus,
+  der Bot wird aber nicht im selben Atemzug ausgeschaltet (der Server wuerde die
+  noch wartende Anweisung verwerfen). Der naechste Start des AddOns raeumt auf
+  ("AutoFishPending" in den gespeicherten Daten).
+- NEU: Pruefung. Erst wenn die Liste des Bots "master fishing" enthaelt,
+  meldet das AddOn "gestartet"; sonst bis zu drei Versuche und eine klare
+  Meldung (Verweigerung durch den Server, Bot antwortet nicht, Fluestern
+  gesperrt ...). Zeigt der Client die Antworten nie an, gilt der Start als
+  "nicht bestaetigt" (Warnung). Im Betrieb fragt die Kontrolle bei Stillstand
+  nach, statt blind zu senden.
+- NEU: "-mount" schon im ersten Strategiebefehl (Option "Bot nicht aufsitzen
+  lassen"), "+mount" beim Stoppen; Hinweis, wenn der Charakter im Sattel sitzt.
+- NEU: Zusammenspiel mit Botpad (Hold/Release ab Botpad 1.3; aeltere Fassungen
+  werden abgewartet, im Modus "Minimal" kommt eine Warnung) und AutoTravel
   (Ruhe waehrend einer Reise).
 - NEU: /fb auto diag und /fb auto probe zur Fehlersuche.
 - NEU: Bot-Fluestern im Chat ausblenden (Option, Standard an).
-- FIX: UTF-8-Marke (BOM) am Anfang von LibFishing-1.0.lua, localization.zhCN.lua
-  und localization.zhTW.lua entfernt; fehlendes Zeilenende nach der letzten
-  Zeile der TOC; ungueltige UTF-8-Bytes in localization.de.lua und
-  FishingBuddy.lua; this/arg1 in XML- und Ereignisbehandlern durch self/
-  elapsed/... ersetzt; ein ausgefallenes FishingExtravaganza.lua (Astrolabe)
-  legt die anderen Module nicht mehr lahm.
-- NEU: tests/ -- Offline-Tests (Laden, Auto-Angeln gegen ein Servermodell).
+- FIX (Vorbeugung, kein beobachteter Fehler): UTF-8-Marke (BOM) am Anfang von
+  LibFishing-1.0.lua, localization.zhCN.lua und localization.zhTW.lua entfernt;
+  fehlendes Zeilenende nach der letzten Zeile der TOC; ungueltige UTF-8-Bytes
+  in localization.de.lua und FishingBuddy.lua; this/arg1 in XML- und
+  Ereignisbehandlern durch self/elapsed/... ersetzt (der 3.3.5a-Client kennt
+  sie noch, spaetere nicht); ein ausgefallenes FishingExtravaganza.lua
+  (Astrolabe) legt die anderen Module nicht mehr lahm.
+- NEU: tests/ -- Offline-Tests (Laden, Auto-Angeln gegen ein Servermodell). Sie
+  laufen ohne Spiel und ohne Server; im Spiel ist die Fassung NICHT erprobt.
 0.9.9-enhanced
 - BUGFIX: FishingSchools.lua -- ComputeDistance() wurde mit (x, x) statt
   (x, y) aufgerufen; Fischschwaerme wurden mehrfach angelegt.

@@ -67,19 +67,29 @@ sends (written from the C++ sources, rule by rule with file/line comments; NOT m
   * '.playerbots bot self' is a TOGGLE and is refused for SelfBotLevel 0 / 1-without-GM; level > 2 switches it on at login
   * party chat from a player without a group is dropped by the core before any module sees it
   * a whisper to oneself reaches the bot (unless the GM whisper filter is on); the line comes back as
-    CHAT_MSG_WHISPER_INFORM and CHAT_MSG_WHISPER; the bot answers 'nc ?' with 'Strategies: a, b, c'
+    CHAT_MSG_WHISPER_INFORM and CHAT_MSG_WHISPER; the bot answers '?' with 'Strategies: a, b, c'
     (the same text again within RepeatDelay is not repeated)
-  * 'nc +x,-y,~z,!' change the strategy set; it is stored and restored at the next activation; without the
-    strategy 'chat' the bot ignores every command
-  * options: latency, AI tick, a bot that drops 'master fishing' by itself, a mount that makes the bot mount,
-    a client that never shows the bot's answer, a missing module, ...
-The scenarios named auto-* (see --list) drive the Auto module against it: solo player, bot already on, refusals,
-deaf bot, Botpad with and without the Hold interface, vanishing strategy, mount, chat echoes, saved-settings
-migration, AutoTravel trip, logout, diag command.  auto-real-botpad loads a real Botpad checkout when
-BOTPAD_DIR (or ../BotPad) points to one.
+  * chat commands are QUEUED and drained once per AI update; the 'nc' trigger keeps only the LAST parameter
+    of a drain (a different nc command that is overwritten counts as LOST -- scenarios assert there is none;
+    an identical repeat is harmless and not counted)
+  * a freshly activated self bot is deaf for ~10 s (first AI tick + PassiveDelay); a bot with 'master fishing'
+    can sleep through the bobber wait (option busy = { cycle, sleep })
+  * 'nc +x,-y,~z,!,?' are handled item by item ('!' after the others); the set is stored on every change and
+    restored (plus 'chat') at the next activation; without the strategy 'chat' the bot ignores every command
+  * options: latency, AI tick, deaf window, a bot that drops 'master fishing' by itself, a bot that never
+    accepts it (ignore_fishing), a mount that makes the bot mount, a client that never shows the bot's answer,
+    a missing module, ...
+The scenarios named auto-* (see --list) drive the Auto module against it: solo player, bot already on (awake
+and still deaf), refusals, deaf bot, Botpad with and without the Hold interface (and a failing Hold), vanishing
+strategy, a bot that never accepts the strategy, mount, chat echoes, a sleeping bot, slow connections, a bot
+switched off by somebody else, saved-settings migration, custom blocks, AutoTravel trip, logout / /reload
+(also while the removal is still pending), diag command.  auto-real-botpad loads a real Botpad checkout when
+BOTPAD_DIR (or ../BotPad) points to one; without one it is reported as SKIP.
+`--trace` prints the Auto module's trace and every sent line for failing scenarios.
 
 What the model cannot tell you: whether the real 3.3.5a client shows a whisper from yourself, whether the bot
-casts on the real terrain, or anything about timing on a real server.  '/fb auto diag' in the game answers those.
+casts on the real terrain, or anything about timing on a real server.  The timing constants in FishingAuto.lua
+were chosen to fit the model; '/fb auto diag' in the game answers those questions.
 
 
 Part 1: static_audit.lua  (reads files, runs luac/luacheck)
@@ -120,7 +130,7 @@ Boot sequence used by every scenario (the real client's order, approximated):
   whatif-*             WHAT-IF only: a library/file fails to load -> how far does one failure reach?
   no-NONE_KEY          the client does not define the global NONE_KEY
 
-Reading the output: per scenario "[PASS|FAIL|XFAIL|XPASS]", failed checks with detail, the
+Reading the output: per scenario "[PASS|FAIL|XFAIL|XPASS|SKIP]", failed checks with detail, the
 distinct Lua errors with count and context ("load FishingAuto.lua", "OnLoad of FishingBuddyRoot",
 "OnEvent of X (EVENT)"), files that did not load, and a summary table.  The last lines report the
 "harness gap": widget methods the code called that the stub accepts but ignores.
