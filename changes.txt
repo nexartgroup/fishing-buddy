@@ -21,8 +21,20 @@
   Rueckname beim Stoppen wird alle 3 s wiederholt, bis sie bestaetigt ist.
 - FIX: Abmelden oder /reload waehrend des Angelns: die Rueckname geht hinaus,
   der Bot wird aber nicht im selben Atemzug ausgeschaltet (der Server wuerde die
-  noch wartende Anweisung verwerfen). Der naechste Start des AddOns raeumt auf
-  ("AutoFishPending" in den gespeicherten Daten).
+  noch wartende Anweisung verwerfen). Das AddOn vermerkt, was aufzuraeumen ist
+  ("AutoFishPending" in den gespeicherten Daten, auch ob "mount" zurueckgegeben
+  werden muss), schaut nach dem Anmelden nach und wiederholt das, bis der Bot
+  antwortet (hoechstens fuenf Anmeldungen, oder bei der naechsten
+  Einschaltmeldung); ein neuer Lauf uebernimmt den Vermerk. Dasselbe gilt, wenn
+  jemand den Selbstbot von aussen ausschaltet, waehrend die Strategie gesetzt ist.
+- FIX: Weitere Folgen der Pruefung: Stopp zwischen Korrekturschalten und Antwort
+  laesst einen schon laufenden Bot an; eine Antwort auf den Startbefehl, die erst
+  nach dem Stopp ankommt, gilt nicht als Bestaetigung der Rueckname; ein
+  abgelehnter Start blockiert den naechsten nicht fuer 5 s; hat der Bot die
+  Strategie schon (der Server wiederholt gleichlautende Antworten nicht), wird
+  der Start trotzdem bestaetigt; die uebrigen Zeilen eines eigenen Blocks laufen
+  nur einmal; die Antworten des Bots auf den Stopp bleiben aus dem Chat; der
+  erste Koeder-Versuch geht nicht an einen Bot, der noch nicht bereit ist.
 - NEU: Pruefung. Erst wenn die Liste des Bots "master fishing" enthaelt,
   meldet das AddOn "gestartet"; sonst bis zu drei Versuche und eine klare
   Meldung (Verweigerung durch den Server, Bot antwortet nicht, Fluestern
@@ -55,7 +67,8 @@
 - FIX: "entry" und "lastSkillMax" waren globale Variablen.
 - FIX: localization.ruRU.lua war nicht in der TOC eingetragen.
 - NEU: FishingAuto.lua -- Auto-Angeln ueber die Playerbot-Funktion
-  (getestet mit AzerothCore / mod-playerbots),
+  (getestet mit AzerothCore / mod-playerbots -- Nachtrag: ohne Gruppe tat es
+  nichts, siehe 0.9.10),
   mit verschiebbarem Panel, Toggle-Button, frei editierbaren
   Befehlsbloecken, Watchdog (Taschen, Kampf, Tod, Zeitlimit,
   Stillstand) und Koeder-Schnellbutton.

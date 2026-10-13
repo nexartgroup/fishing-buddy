@@ -71,6 +71,9 @@ local MAX_TRIES     = 3;      -- Versuche, "master fishing" zu setzen
 local MAX_VANISH    = 3;      -- so oft darf die Strategie verschwinden, dann gilt das Angeln als beendet
 local STOP_WAIT     = 24;     -- so lange auf die Rueckname der Strategie warten, bevor ausgeschaltet wird
 local STOP_REPROBE  = 3.0;    -- Abstand, in dem die Rueckname wiederholt wird, solange keine Antwort kommt
+local RESUME_WAIT   = 14;     -- Aufraeumen nach dem Anmelden: so lange auf den Bot warten (er hoert evtl. erst nach ~10 s zu)
+local RESUME_TRIES  = 5;      -- so viele Anmeldungen lang wird ein unbeantwortetes Aufraeumen wiederholt
+local DEAF_WINDOW   = 12.5;   -- ein frisch eingeschalteter Bot hoert etwa so lange nicht zu
 local ECHO_WINDOW   = 30;     -- so lange gelten eigene Fluesterbefehle als "eigene" (Echo ausblenden)
 local TRACE_MAX     = 40;
 
@@ -410,7 +413,9 @@ end
 --   extra: weitere Operationen vor denen des Blocks (z. B. "-mount")
 --   lead / trail: ein "?" davor / danach -- der Bot antwortet dann mit seiner
 --   Strategieliste VOR bzw. NACH der Aenderung (die Antwort ist die Pruefung).
-local function SendBlock(block, extra, lead, trail)
+--   ncOnly: nur den zusammengefassten nc-Befehl senden (bei Wiederholungen; die
+--   uebrigen Zeilen des Blocks laufen nur beim ersten Mal).
+local function SendBlock(block, extra, lead, trail, ncOnly)
    local ops, others = CollectBlock(block);
    local all = {};
    if ( lead ) then
@@ -426,10 +431,15 @@ local function SendBlock(block, extra, lead, trail)
       all[#all + 1] = "?";
    end
    if ( #all > 0 ) then
+      if ( lead or trail ) then
+         lastProbeAt = GetTime();         -- die Antwort(en) des Bots gehoeren nicht in den Chat
+      end
       WhisperSelf("nc "..table.concat(all, ","));
    end
-   for _, l in ipairs(others) do
-      ExecuteLine(l);
+   if ( not ncOnly ) then
+      for _, l in ipairs(others) do
+         ExecuteLine(l);
+      end
    end
 end
 
@@ -578,6 +588,12 @@ local function OnSystemMessage(msg)
       selfState = true;
       Trace("<- system: "..msg);
       SessionEvent("on", msg);
+      if ( not session and not stopping and not running
+           and type(FishingBuddy.GetSetting("AutoFishPending")) == "table" ) then
+         -- Jemand schaltet den Bot ein, und von unserem letzten Lauf ist noch etwas
+         -- aufzuraeumen: nachsehen, sobald der Bot zuhoert.
+         Auto.ScheduleResume(DEAF_WINDOW);
+      end
    elseif ( MatchAny(low, OFF_PATTERNS) ) then
       selfState = false;
       Trace("<- system: "..msg);
@@ -783,10 +799,15 @@ local function Apply(s)
    end
    s.leadSent = (set == nil);
    s.replies = 0;
+   if ( not s.applied and s.carry ~= nil ) then
+      -- Die Hinterlassenschaft der letzten Sitzung (fehlendes "mount") ist ab jetzt
+      -- Sache dieses Laufs: sein Stopp stellt sie wieder her.
+      FishingBuddy.SetSetting("AutoFishPending", nil);
+   end
    s.applied = true;
    local block = s.confirmed and GetBlock("AutoFishKeepAliveCommands", DEFAULT_KEEP)
                              or GetBlock("AutoFishStartCommands", DEFAULT_START);
-   SendBlock(block, extra, s.leadSent, true);
+   SendBlock(block, extra, s.leadSent, true, s.retry);
    s.step = "apply";
    s.due = GetTime() + (set and WARM_WAIT or COLD_WAIT);
 end
@@ -795,6 +816,7 @@ local function Confirm(s, unverified)
    local now = GetTime();
    local first = not s.confirmed;
    s.confirmed = true;
+   s.retry = false;
    s.step = "run";
    s.due = nil;
    s.tries = 0;
@@ -832,6 +854,7 @@ end
 
 -- Die Strategie ist nach einer Antwort nicht da: erneut versuchen oder aufgeben
 local function Missing(s)
+   s.retry = true;
    s.tries = s.tries + 1;
    if ( s.tries >= MAX_TRIES ) then
       Fail(string.format(FBConstants.AUTO_ERR_STRATEGY, s.tries));
@@ -845,6 +868,7 @@ local function ToggleOn(s)
    s.step = "toggle";
    s.due = GetTime() + TOGGLE_WAIT;
    s.toggleSent = true;
+   s.toggleAnswered = false;
    Trace("-> say: .playerbots bot self");
    SendChatMessage(".playerbots bot self", "SAY");
 end
@@ -854,7 +878,7 @@ local function ApplyReply(s, set)
    s.replies = s.replies + 1;
    if ( s.leadSent and s.replies == 1 and s.hadMount == nil ) then
       -- die erste Antwort ist die Liste VOR der Aenderung
-      s.hadMount = set["mount"] and true or false;
+      s.hadMount = (set["mount"] or s.carry) and true or false;
    end
    s.strategies = set;
    if ( set["master fishing"] and not (s.mountSent and set["mount"]) ) then
@@ -877,6 +901,7 @@ local function HealthResult(s, set)
       return;
    end
    s.present = 0;
+   s.retry = false;
    if ( not set["master fishing"] ) then
       s.vanish = s.vanish + 1;
       Trace("health: master fishing missing ("..s.vanish..")");
@@ -906,7 +931,9 @@ SessionEvent = function(kind, arg)
       if ( st.step == "awaiton" ) then
          -- Stop kam, waehrend der Umschalter noch unterwegs war: rueckgaengig machen
          if ( kind == "on" ) then
-            st.ownsBot = true;
+            -- Nach einem Korrekturschalten ist der Bot wieder so, wie er vor dem Start
+            -- war (er lief schon): dann gehoert er nicht uns.
+            st.ownsBot = not st.retoggled;
             Auto.FinishShutdown();
          elseif ( kind == "off" ) then
             -- wir hatten einen laufenden Bot ausgeschaltet: wieder einschalten
@@ -919,7 +946,12 @@ SessionEvent = function(kind, arg)
             ReleaseBotpad();
          end
       elseif ( kind == "strategies" ) then
-         if ( st.step == "probe" ) then
+         if ( (st.skip or 0) > 0 ) then
+            -- Antwort auf einen frueheren Befehl (Start noch in Arbeit): sie sagt nichts
+            -- ueber die Rueckname; die Bestaetigung kommt mit der naechsten.
+            st.skip = st.skip - 1;
+            Trace("shutdown: reply to an earlier command ignored");
+         elseif ( st.step == "probe" ) then
             -- Aufraeumen nach /reload: nur noch etwas tun, wenn die Spuren da sind
             if ( arg["master fishing"] or (st.restore and not arg["mount"]) ) then
                st.resend();
@@ -943,6 +975,7 @@ SessionEvent = function(kind, arg)
 
    if ( kind == "refused" ) then
       if ( step == "probe" or step == "toggle" ) then
+         s.toggleAnswered = true;
          Fail(string.format(FBConstants.AUTO_ERR_REFUSED, arg or ""));
       end
    elseif ( kind == "whisperrefused" ) then
@@ -953,11 +986,14 @@ SessionEvent = function(kind, arg)
       if ( step == "toggle" ) then
          -- After a corrective second toggle the bot is back in the state it was
          -- in before: it was on already (and deaf), so it is not ours to switch off.
+         s.toggleAnswered = true;
          s.ownsBot = not s.retoggled;
          s.step = "settle";
          s.due = now + SettleDelay();
       elseif ( step == "probe" ) then
-         s.sawOn = true;       -- jemand schaltet gerade ein: noch einmal fragen, nicht umschalten
+         -- jemand schaltet gerade ein: spaeter noch einmal fragen, nicht umschalten
+         s.sawOn = true;
+         s.sawOnAt = now;
       end
    elseif ( kind == "off" ) then
       if ( step == "toggle" ) then
@@ -966,6 +1002,7 @@ SessionEvent = function(kind, arg)
             s.retoggled = true;
             ToggleOn(s);
          else
+            s.toggleAnswered = true;
             Fail(FBConstants.AUTO_ERR_TOGGLE);
          end
       elseif ( step ~= "probe" ) then
@@ -977,7 +1014,7 @@ SessionEvent = function(kind, arg)
       if ( step == "probe" ) then
          -- Der Bot lebt und hoert zu: nicht umschalten.
          s.strategies = arg;
-         s.hadMount = arg["mount"] and true or false;
+         s.hadMount = (arg["mount"] or s.carry) and true or false;
          s.step = "settle";
          s.due = now;
       elseif ( step == "apply" ) then
@@ -1003,10 +1040,17 @@ local function SessionTick(now)
    end
    local step = s.step;
    if ( step == "probe" ) then
-      if ( s.sawOn and not s.reprobed ) then
+      if ( (s.sawOn or s.mayDup) and not s.reprobed ) then
+         -- Entweder schaltet gerade jemand ein (der Bot hoert erst nach ~10 s zu), oder
+         -- eine Antwort gleichen Wortlauts kam kurz vorher (der Server unterdrueckt
+         -- sie dann): nicht umschalten, sondern spaeter noch einmal fragen.
          s.reprobed = true;
-         s.sawOn = false;
          s.due = now + ProbeWait();
+         if ( s.sawOn ) then
+            s.due = math.max(s.due, (s.sawOnAt or now) + DEAF_WINDOW);
+         end
+         s.sawOn = false;
+         s.mayDup = false;
          SendProbe();
       else
          -- keine Antwort auf "nc ?": der Bot ist aus -- einschalten
@@ -1017,7 +1061,13 @@ local function SessionTick(now)
    elseif ( step == "settle" ) then
       Apply(s);
    elseif ( step == "apply" ) then
-      if ( s.replies > 0 or s.sawReply ) then
+      local known = s.strategies;
+      if ( s.replies == 0 and known and known["master fishing"] and not (s.mountSent and known["mount"]) ) then
+         -- Die Liste war schon so, wie sie sein soll; die Antwort auf den Befehl ist
+         -- ausgeblieben, weil der Server einen gleichlautenden Text nicht wiederholt.
+         Trace("apply: list was already as wanted, the reply was suppressed");
+         Confirm(s);
+      elseif ( s.replies > 0 or s.sawReply ) then
          Missing(s);
       else
          -- Der Bot antwortet nie auf "nc ?" (der Client zeigt keine Fluesternachricht
@@ -1028,6 +1078,13 @@ local function SessionTick(now)
       s.step = "run";       -- keine Antwort: unklar, nichts unternehmen
       s.due = nil;
    end
+end
+
+-- Nach /reload oder Abmelden ist die Strategie evtl. noch beim Bot gespeichert: beim
+-- naechsten Anmelden nachsehen und aufraeumen.
+local function SavePending(ownsBot, restore, tries)
+   FishingBuddy.SetSetting("AutoFishPending", { ownsBot = ownsBot and true or false, restore = restore and true or false,
+                                                tries = tries or 0 });
 end
 
 -- Abschalten: erst die Strategie zuruecknehmen, DANN den Bot ausschalten. Ein
@@ -1053,8 +1110,12 @@ local function StopTick(now)
       return;
    end
    if ( st.step == "probe" ) then
-      -- Aufraeumen nach /reload: der Bot antwortet nicht (er ist aus) -- nichts zu tun
+      -- Aufraeumen nach dem Anmelden: der Bot antwortet nicht (er ist aus). Der Vermerk
+      -- bleibt, bis er sich meldet (bei der naechsten Anmeldung oder Einschaltmeldung).
       stopping = nil;
+      if ( st.tries < RESUME_TRIES ) then
+         SavePending(st.ownsBot, st.restore, st.tries);
+      end
       ReleaseBotpad();
       return;
    elseif ( st.step == "awaiton" ) then
@@ -1073,29 +1134,25 @@ local function StopTick(now)
    st.due = now + STOP_REPROBE;
 end
 
--- Nach /reload oder Abmelden ist die Strategie evtl. noch beim Bot gespeichert: beim
--- naechsten Anmelden nachsehen und aufraeumen.
-local function SavePending(ownsBot, restore)
-   FishingBuddy.SetSetting("AutoFishPending", { ownsBot = ownsBot and true or false, restore = restore and true or false });
-end
-
 local function StartResume()
    local pend = FishingBuddy.GetSetting("AutoFishPending");
    if ( type(pend) ~= "table" ) then
       return;
    end
-   FishingBuddy.SetSetting("AutoFishPending", nil);       -- zuerst loeschen: nie in Schleife
    if ( running or session or stopping ) then
-      return;
+      return;           -- ein Lauf kuemmert sich selbst (sein Stopp raeumt auf); der Vermerk bleibt
    end
+   FishingBuddy.SetSetting("AutoFishPending", nil);       -- erst loeschen, bei Bedarf unten wieder anlegen
    local restore = pend.restore and true or false;
    local now = GetTime();
    Trace("resume: looking for traces of the last session");
+   local sent = 0;
    stopping = {
-      step = "probe", started = now, due = now + ProbeWait(),
+      step = "probe", started = now, due = now + RESUME_WAIT, tries = (pend.tries or 0) + 1,
       ownsBot = pend.ownsBot and true or false, restore = restore,
       resend = function()
-         SendBlock(GetBlock("AutoFishStopCommands", DEFAULT_STOP), restore and { "+mount" } or nil, false, true);
+         sent = sent + 1;
+         SendBlock(GetBlock("AutoFishStopCommands", DEFAULT_STOP), restore and { "+mount" } or nil, false, true, sent > 1);
       end,
    };
    SendProbe();
@@ -1121,36 +1178,51 @@ local function BeginShutdown(s, quick)
       ReleaseBotpad();
       return;
    end
-   if ( s.step == "toggle" and s.toggleSent and not s.ownsBot ) then
+   if ( s.step == "toggle" and s.toggleSent and not s.toggleAnswered and not s.ownsBot ) then
       -- Die Antwort auf den Umschalter steht noch aus: abwarten und das Ergebnis
       -- rueckgaengig machen (sonst bleibt der Bot im falschen Zustand zurueck).
       Trace("shutdown: waiting for the answer to the toggle");
-      stopping = { step = "awaiton", started = now, due = now + TOGGLE_WAIT, ownsBot = false };
+      stopping = { step = "awaiton", started = now, due = now + TOGGLE_WAIT, ownsBot = false, retoggled = s.retoggled };
       return;
    end
-   local restore = s.mountSent and s.hadMount ~= false;
+   -- "mount" zurueckgeben: wenn dieser Lauf es entfernt hat, oder wenn die letzte
+   -- Sitzung es entfernt und nicht mehr zurueckgegeben hat (s.carry)
+   local restore = ((s.mountSent and s.hadMount ~= false) or s.carry) and true or false;
    if ( s.applied and selfState ~= false ) then
+      local sent = 0;
       local function remove(trail)
-         SendBlock(GetBlock("AutoFishStopCommands", DEFAULT_STOP), restore and { "+mount" } or nil, false, trail);
+         sent = sent + 1;
+         SendBlock(GetBlock("AutoFishStopCommands", DEFAULT_STOP), restore and { "+mount" } or nil, false, trail, sent > 1);
       end
       if ( quick ) then
          -- Abmelden / /reload: die Anweisung geht hinaus, ausgeschaltet wird NICHT in
          -- demselben Atemzug (der Bot verwirft dabei die noch wartende Anweisung);
-         -- das Aufraeumen holt der naechste Start des AddOns nach.
+         -- das Aufraeumen holt die naechste Anmeldung nach.
          remove(false);
-         if ( s.ownsBot or restore ) then
-            SavePending(s.ownsBot, restore);
-         end
+         SavePending(s.ownsBot, restore);
          ReleaseBotpad();
          return;
+      end
+      -- Antworten auf noch laufende frueherere Befehle sind keine Bestaetigung der Rueckname
+      local skip = 0;
+      if ( s.step == "apply" ) then
+         skip = math.max(0, (s.leadSent and 2 or 1) - (s.replies or 0));
+      elseif ( s.step == "check" ) then
+         skip = 1;
       end
       remove(true);
       stopping = {
          step = "remove", started = now, due = now + STOP_REPROBE,
-         ownsBot = s.ownsBot, restore = restore,
+         ownsBot = s.ownsBot, restore = restore, skip = skip,
          resend = function() remove(true); end,
       };
       return;
+   end
+   if ( s.applied ) then
+      -- Der Bot wurde von aussen ausgeschaltet, bevor die Strategie zurueckgenommen
+      -- war: sie kann noch gespeichert sein. Das Aufraeumen holt die naechste
+      -- Einschaltmeldung oder Anmeldung nach.
+      SavePending(false, restore);
    end
    if ( s.ownsBot and selfState ~= false ) then
       -- Es wurde nichts gesetzt: nur den Bot wieder ausschalten, den wir eingeschaltet haben.
@@ -1166,8 +1238,15 @@ Start = function(silent)
       return;
    end
    if ( stopping ) then
-      Warn(FBConstants.AUTO_STOPPING);
-      return;
+      if ( stopping.step ~= "probe" ) then
+         Warn(FBConstants.AUTO_STOPPING);
+         return;
+      end
+      -- Das Aufraeumen nach dem Anmelden wartet noch auf den Bot: der neue Lauf
+      -- uebernimmt die Spuren (der Vermerk bleibt, bis er sie beseitigt hat).
+      SavePending(stopping.ownsBot, stopping.restore, stopping.tries);
+      stopping = nil;
+      ReleaseBotpad();
    end
 
    if ( not FL:IsFishingPole() ) then
@@ -1190,12 +1269,20 @@ Start = function(silent)
    ResetCounters();
    partyNoted = false;
    noPoleNoted = false;
+   -- Vermerk der letzten Sitzung: ob sie "mount" entfernt und nicht zurueckgegeben hat
+   local pend = FishingBuddy.GetSetting("AutoFishPending");
+   local carry = nil;
+   if ( type(pend) == "table" ) then
+      carry = pend.restore and true or false;
+   end
    session = {
       step = "probe", due = GetTime() + ProbeWait(),
       tries = 0, vanish = 0, present = 0, lastCheck = 0, replies = 0,
       ownsBot = false, retoggled = false, toggleSent = false, sawReply = false,
       sawOn = false, reprobed = false, confirmed = false, applied = false,
       mountSent = false, hadMount = nil, strategies = nil, leadSent = false,
+      retry = false, toggleAnswered = false, mayDup = ((GetTime() - lastStrategiesAt) < 3),
+      carry = carry,
    };
    Trace("start");
    HoldBotpad();
@@ -1285,8 +1372,8 @@ function Auto.AbortShutdown()
       return;
    end
    stopping = nil;
-   if ( st.ownsBot and st.step == "remove" ) then
-      SavePending(true, st.restore);
+   if ( st.step == "remove" or st.step == "probe" ) then
+      SavePending(st.ownsBot, st.restore, st.tries);
    end
    ReleaseBotpad();
 end
@@ -1333,6 +1420,9 @@ local function HandleLure(now)
 
    -- a) Automatisch ueber den Bot auftragen lassen
    if ( FishingBuddy.GetSettingBool("AutoFishAutoLure") and not lureGaveUp ) then
+      if ( session and not session.confirmed ) then
+         return;          -- der Bot ist noch nicht soweit: ein Versuch ginge ins Leere
+      end
       local retry = FishingBuddy.GetSetting("AutoFishLureRetry") or 20;
       if ( (now - lureTriedAt) >= retry ) then
          lureTriedAt = now;
@@ -1968,7 +2058,7 @@ local function PrintDiagnosis()
    Say(string.format(FBConstants.AUTO_DIAG_ENV, YesNo(FL:IsFishingPole()), YesNo(IsMounted and IsMounted()),
                      YesNo(IsGrouped()), YesNo(InCombatLockdown())));
    Say(string.format(FBConstants.AUTO_DIAG_ADDONS,
-                     YesNo(bp and bp.Bot), (bp and bp.Bot and bp.Bot.Hold) and "" or " (< 1.3)",
+                     YesNo(bp and bp.Bot), (bp and bp.Bot and not bp.Bot.Hold) and " (< 1.3)" or "",
                      YesNo(botpadHeld), YesNo(at and at.Start ~= nil), YesNo(TripActive())));
    Say(FBConstants.AUTO_DIAG_TRACE);
    for _, entry in ipairs(trace) do

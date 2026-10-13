@@ -11,8 +11,8 @@ FishingBuddy.Auto.Toggle(), advances time, and records
   * every Lua error (with traceback; nothing is swallowed) and
   * every SendChatMessage call.
 
-It is meant to become the repo's offline test suite (copy this directory to
-<repo>/tests/ ; the scripts find their own location, the repo path is an argument).
+The scripts find their own location; the repo path is an argument (default: the directory above tests/).
+CI (.github/workflows/check.yml) runs ./run.sh on every push.
 
 NOTHING HERE HAS BEEN RUN AGAINST A REAL CLIENT OR SERVER.  Every statement the
 harness makes is "offline Lua 5.1 against hand-written stubs" -- never "tested in game".
@@ -55,6 +55,7 @@ Files
   static_audit.lua         part 1: file-level checks (see below)
   scenarios.lua            part 2: the boot scenarios and their assertions
   harness/wowenv.lua       the WoW 3.3.5a stand-in (API stubs, widgets, XML frame loader, TOC loader)
+  harness/botserver.lua    the AzerothCore / mod-playerbots model the auto-* scenarios talk to (see below)
   harness/xmlparse.lua     minimal XML reader
   luacheckrc               luacheck config with a WoW 3.3.5a global whitelist
   expected_failures.txt    see above
@@ -184,9 +185,10 @@ HONEST BOUNDARY -- what the harness cannot model
 
 Self-test (does the harness actually catch defects?)
 ----------------------------------------------------
-Done once by hand on a scratch copy (never on the repo): replacing the call
-  ExecuteBlock(GetBlock("AutoFishStartCommands", DEFAULT_START))   in FishingAuto.lua by ExecuteBlockX(...)
-and FBConstants.AUTO_STARTED by FBConstants.AUTO_STARTD made scenarios.lua report
-  "FishingAuto.lua:277: attempt to call global 'ExecuteBlockX' (a nil value)" (5 failed checks) and
-static_audit.lua report "FBConstants.AUTO_STARTD is referenced ... defined nowhere" and
-"global 'ExecuteBlockX'".  Repeat it with:  cp -r REPO /tmp/x/FishingBuddy; edit; ./run.sh /tmp/x/FishingBuddy
+Done by hand on scratch copies (never on the repo): several hundred single-edit mutants of FishingAuto.lua (flipped
+comparisons, constants changed by an order of magnitude, dropped guards, swapped commands, removed Hold/Release calls)
+were run through scenarios.lua; the survivors that were not equivalent became the scenarios added after the independent
+review (auto-stop-sweep, auto-logout-asleep, auto-foreign-off-leftover, ...).  Each of those fails on the code before the
+fix it belongs to.  To repeat a single check:
+  cp -r REPO /tmp/x/FishingBuddy; edit FishingAuto.lua (e.g. rename the SendBlock call in Apply); cd /tmp/x/FishingBuddy && ./tests/run.sh .
+(the folder must be called FishingBuddy for the static audit).

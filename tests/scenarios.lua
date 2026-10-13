@@ -1176,7 +1176,9 @@ scenario("auto-logout",
       env3:fire("PLAYER_LOGIN")
       env3:advance(30, 0.1)
       r:check(env3.server.toggles == 0, "bot off: no toggle is sent blindly", "toggles: " .. env3.server.toggles)
-      r:check(env3.G.FishingBuddy_Player.Settings.AutoFishPending == nil, "flag cleared anyway")
+      local kept = env3.G.FishingBuddy_Player.Settings.AutoFishPending
+      r:check(type(kept) == "table" and kept.restore == true and kept.tries == 1,
+              "the note stays (the bot did not answer, the leftovers may still be stored) and counts this login")
    end)
 
 scenario("auto-logout-while-stopping",
@@ -1307,6 +1309,1552 @@ scenario("auto-real-botpad",
       env.server:toggle(); env:advance(15, 0.1)
       r:check(count_sent(env, "nc !") >= 1, "after Release Botpad applies its mode again on the next activation")
    end)
+
+-- ---------------------------------------------------------------------------
+-- scenarios added after the independent review / mutation run (see git log)
+-- ---------------------------------------------------------------------------
+
+-- proposed_scenarios.lua  (mutation-testing lens)
+-- ---------------------------------------------------------------------------
+-- Extra scenarios for tests/scenarios.lua.  They close the gaps that a mutation run over FishingAuto.lua
+-- found: small code changes (mutants) that the 52 existing scenarios do not notice.  Paste this block into
+-- tests/scenarios.lua directly above the "-- run" section (after the scenario "auto-real-botpad"); it uses the
+-- helpers that file defines (boot, start, stop, Auto, count_sent, count_sent_matching, sent_type, no_errors,
+-- no_collapse, chat_has, strip_colors, sent_texts, saved_of, Server).
+--
+-- Every scenario passes on the unmodified FishingAuto.lua and fails on the mutants named in the "[...]" tag
+-- above it (mutant ids refer to rv_mutation/mutants.py).  Offline only: stub client + server model, nothing
+-- here was run in a real game.
+-- ---------------------------------------------------------------------------
+
+local PX = {}
+
+function PX.chat_count(env, needle)
+   local n = 0
+   for _, l in ipairs(env.chat) do
+      if strip_colors(l):find(needle, 1, true) then n = n + 1 end
+   end
+   return n
+end
+
+-- advance until `n` more health-check probes ("nc ?") have been sent, then give the answer time to arrive
+function PX.wait_probe(env, n)
+   for _ = 1, n do
+      local before = count_sent(env, "nc ?")
+      local guard = 0
+      while count_sent(env, "nc ?") == before and guard < 4000 do env:advance(0.1, 0.1); guard = guard + 1 end
+      env:advance(2, 0.1)
+   end
+end
+
+-- advance (in 0.1 s steps) until a new health-check probe has just gone out, then 0.1 s more: the bot has read it,
+-- its answer is still on the way
+function PX.stop_with_check_in_flight(env)
+   local before, guard = count_sent(env, "nc ?"), 0
+   while count_sent(env, "nc ?") == before and guard < 4000 do env:advance(0.1, 0.1); guard = guard + 1 end
+   env:advance(0.1, 0.1)
+   env:call("Auto.Stop", Auto(env).Stop)
+   env:advance(40, 0.1)
+end
+
+function PX.panel_texts(env)
+   local out = {}
+   for _, st in pairs(env.state) do
+      if type(st.text) == "string" then
+         local t = strip_colors(st.text)
+         if t:find("Auto Fishing:", 1, true) or t:find("/h", 1, true) or t:find("slots", 1, true) then out[#out + 1] = t end
+      end
+   end
+   return table.concat(out, " || ")
+end
+
+function PX.count_lure_lines(env)
+   local n = 0
+   for _, e in ipairs(env.sent) do if e.text:find("^u ") then n = n + 1 end end
+   return n
+end
+
+function PX.received(srv, text)
+   local n = 0
+   for _, rcv in ipairs(srv.received) do if rcv.text == text then n = n + 1 end end
+   return n
+end
+
+function PX.until_step(env, step, maxsecs)
+   local guard = 0
+   while Auto(env).GetState().step ~= step and guard < (maxsecs or 60) * 100 do env:advance(0.01, 0.01); guard = guard + 1 end
+   return Auto(env).GetState().step == step
+end
+
+-- [Bs4, Bs10, O07] a foreign switch-off during the run: the addon is idle at once (nothing to take back from a dead bot)
+scenario("auto-foreign-off-late",
+   "somebody switches the self bot off during the run: the addon is idle within seconds, sends no removal into the void and never switches the bot back on",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local srv = env.server
+      start(env)
+      env:clear_sent()
+      srv:toggle()                                           -- the user clicks Botpad's BOT AUS
+      env:advance(5, 0.1)
+      r:check(not Auto(env).IsRunning() and Auto(env).GetState().step == "idle", "5 s later the addon is idle, not waiting for a dead bot", Auto(env).GetState().step)
+      r:check(count_sent_matching(env, "master fishing") == 0, "no removal command was sent to the switched-off bot", table.concat(sent_texts(env), " | "))
+      env:advance(45, 0.1)                                   -- longer than STOP_WAIT
+      r:check(not srv.active and srv.toggles == 2, "the bot stayed off (no toggle from the addon)", "toggles: " .. srv.toggles)
+      r:check(Auto(env).GetState().step == "idle", "and the addon is still idle", Auto(env).GetState().step)
+      no_errors(r, env)
+   end)
+
+-- [O06] with replies the client never shows, a second run in the same session must still clean up
+scenario("auto-no-reply-second-run",
+   "the client never shows the bot's answers: a SECOND run in the same session still takes the strategy back and switches the bot off",
+   function(r)
+      local env = boot{ bom = "strip", server = { reply_visible = false } }
+      r.env = env
+      local srv = env.server
+      start(env, 60)
+      stop(env, 40)
+      r:check(not srv.active and srv.toggles == 2, "run 1: bot off again", "toggles: " .. srv.toggles)
+      start(env, 60)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing"), "run 2: running with the strategy")
+      stop(env, 40)
+      r:check(not srv.active, "run 2: the bot is switched off again (it is not left running with 'master fishing')")
+      r:check(srv.persisted and not srv.persisted["master fishing"], "run 2: the stored set is clean")
+      no_errors(r, env)
+   end)
+
+-- [W01, H02, H03] only the player's OWN whispers are the bot's answers
+scenario("auto-stranger-whisper",
+   "a 'Strategies:' whisper from another player is ignored; the player's own name (any case, with -Realm) is accepted",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local srv = env.server
+      env:chat_event("CHAT_MSG_WHISPER", "Strategies: nc, chat, grind", "Somebody")
+      r:check(Auto(env).GetState().strategies == nil, "a stranger's list is not taken for the bot's answer")
+      env:chat_event("CHAT_MSG_WHISPER", "Strategies: nc, chat", "Testchar-TestRealm")
+      r:check(Auto(env).GetState().strategies == "nc, chat", "the own name with a -Realm suffix is accepted", tostring(Auto(env).GetState().strategies))
+      env:chat_event("CHAT_MSG_WHISPER", "Strategies: nc, food", "testchar")
+      r:check(Auto(env).GetState().strategies == "nc, food", "the own name in lower case is accepted", tostring(Auto(env).GetState().strategies))
+      -- during a start: the stranger's list must not make the addon believe a bot is listening
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      env:advance(0.5, 0.1)
+      env:chat_event("CHAT_MSG_WHISPER", "Strategies: chat, master fishing", "Somebody")
+      env:advance(50, 0.1)
+      r:check(srv.toggles == 1 and srv.active, "the bot was still switched on (the stranger did not stop the toggle)", "toggles: " .. srv.toggles)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing"), "and it fishes")
+      no_errors(r, env)
+   end)
+
+-- [W03, W04, Sx7] "I don't have a Fishing Pole" -- once per run, only during a run
+scenario("auto-pole-complaint-once",
+   "the bot's pole complaint is shown once per run (not on every message) and not at all outside a run",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local srv = env.server
+      srv:whisper("I don't have a Fishing Pole")
+      env:advance(2, 0.1)
+      r:check(PX.chat_count(env, "no fishing pole") == 0, "no warning outside a run")
+      start(env)
+      for _ = 1, 3 do srv:whisper("I don't have a Fishing Pole"); env:advance(1, 0.1) end
+      r:check(PX.chat_count(env, "no fishing pole") == 1, "three complaints in one run: one warning", PX.chat_count(env, "no fishing pole") .. " warnings")
+      stop(env)
+      start(env)
+      srv:whisper("I don't have a Fishing Pole"); env:advance(1, 0.1)
+      r:check(PX.chat_count(env, "no fishing pole") == 2, "the next run warns again", PX.chat_count(env, "no fishing pole") .. " warnings")
+   end)
+
+-- [A01, A02, A03] an AutoTravel trip that begins while the start / a health check is under way
+scenario("auto-trip-during-start",
+   "AutoTravel starts a trip right after Start, or while a health check is answered: the strategy is not sent during the trip and follows within seconds afterwards",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local srv = env.server
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      env:advance(1, 0.1)
+      env.G.AutoTravel = { active = true }
+      env:advance(25, 0.1)
+      r:check(count_sent_matching(env, "master fishing") == 0, "nothing is set while the trip is running", "sent: " .. table.concat(sent_texts(env), " | "))
+      local deferred = 0
+      for _, l in ipairs(Auto(env).GetTrace()) do if l.text:find("apply deferred", 1, true) then deferred = deferred + 1 end end
+      r:check(deferred >= 2 and deferred <= 8, "the deferral is re-tried every ~5 s, not on every tick", deferred .. " deferrals in the trace")
+      env.G.AutoTravel.active = false
+      env:advance(45, 0.1)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing"), "after the trip the strategy is set")
+      no_errors(r, env)
+      -- the same for a health check whose answer arrives after the trip began
+      local env2 = boot{ bom = "strip" }
+      local srv2 = env2.server
+      env2.G.FishingBuddy.SetSetting("AutoFishIdleSeconds", 15)
+      start(env2)
+      srv2:run_nc("-master fishing")                         -- somebody removes it
+      local n0, guard = count_sent(env2, "nc ?"), 0
+      while count_sent(env2, "nc ?") == n0 and guard < 4000 do env2:advance(0.1, 0.1); guard = guard + 1 end
+      env2.G.AutoTravel = { active = true }                  -- the trip begins while the answer is on its way
+      local sets0 = count_sent_matching(env2, "+master fishing")
+      env2:advance(7, 0.1)
+      r:check(count_sent_matching(env2, "+master fishing") == sets0, "health check answered during a trip: the strategy is not re-sent during the trip")
+      env2.G.AutoTravel.active = false
+      env2:advance(5, 0.1)
+      r:check(srv2:has("master fishing"), "... and it is set at the next 5 s deferral tick after the trip (not only by the next health check ~15 s later)")
+      no_errors(r, env2, "second case")
+   end)
+
+-- [T01] AutoTravel active but not relying on the bot: the bot we switched on is switched off
+scenario("auto-trip-no-support",
+   "a stop during an AutoTravel trip that does NOT rely on the self bot (supportOn false) still switches off the bot the addon started",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      start(env)
+      env.G.AutoTravel = { active = true, supportOn = false }
+      stop(env)
+      r:check(not env.server.active, "the bot is switched off")
+      r:check(not env.server:has("master fishing"), "and the strategy is taken back")
+      no_errors(r, env)
+   end)
+
+-- [A12, Cf1, Hr7] the keep-alive block is what a heal sends; healing is silent unless verbose
+scenario("auto-keepalive-block",
+   "a lost strategy is re-set with the KEEP-ALIVE block (not the start block); the heal does not announce 'started' again; the verbose note appears only with the option",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local srv = env.server
+      local FB = env.G.FishingBuddy
+      FB.SetSetting("AutoFishIdleSeconds", 15)
+      FB.SetSetting("AutoFishKeepAliveCommands", "/w %p nc +master fishing\n/w %p co +keepalive")
+      start(env)
+      r:check(PX.received(srv, "co +keepalive") == 0, "the keep-alive block is not used for the start")
+      srv:run_nc("-master fishing")
+      env:advance(60, 0.5)
+      r:check(srv:has("master fishing"), "healed")
+      r:check(PX.received(srv, "co +keepalive") == 1, "the heal used the keep-alive block", PX.received(srv, "co +keepalive") .. " times")
+      r:check(PX.chat_count(env, "Auto fishing started") == 1, "'started' was announced once, not again after the heal", PX.chat_count(env, "Auto fishing started") .. " times")
+      r:check(PX.chat_count(env, "No catch for a while") == 0, "no verbose note by default")
+      FB.SetSetting("AutoFishVerbose", 1)
+      srv:run_nc("-master fishing")
+      env:advance(60, 0.5)
+      r:check(PX.chat_count(env, "No catch for a while") == 1, "with the verbose option the heal is announced")
+      no_errors(r, env)
+   end)
+
+-- [Hr2] a foreign "nc +mount" (fishing stays) is healed
+scenario("auto-mount-back-without-reset",
+   "another addon adds the strategy 'mount' again WITHOUT resetting the rest (nc +mount): the next health check removes it",
+   function(r)
+      local env = boot{ bom = "strip", server = { mount_owned = true } }
+      r.env = env
+      local srv = env.server
+      env.G.FishingBuddy.SetSetting("AutoFishIdleSeconds", 15)
+      start(env)
+      r:check(srv:has("master fishing") and not srv:has("mount"), "precondition: fishing, no mount")
+      srv:run_nc("+mount")
+      r:check(srv:has("master fishing") and srv:has("mount"), "precondition: 'mount' is back, fishing stays")
+      env:advance(60, 0.5)
+      r:check(srv:has("master fishing") and not srv:has("mount"), "healed: 'mount' removed again, fishing kept")
+      for i = 2, 5 do                                        -- it comes back again and again: that is not "the bot lost fishing"
+         srv:run_nc("+mount")
+         PX.wait_probe(env, 1)                               -- one health check each, no healthy streak in between
+         r:check(Auto(env).IsRunning() and srv:has("master fishing") and not srv:has("mount"), "healed again (" .. i .. ")")
+      end
+      no_errors(r, env)
+   end)
+
+-- [Hr3, Hr4] the loss counter decays after three healthy checks, and the healthy streak restarts after a loss
+scenario("auto-vanish-decay",
+   "losses of the strategy far apart do not add up: three healthy checks reset the counter; after that three losses with one healthy check between them end the run",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local srv = env.server
+      env.G.FishingBuddy.SetSetting("AutoFishIdleSeconds", 15)
+      start(env)
+      -- phase 1: one loss, healed, then three healthy checks (no catch at all)
+      srv:run_nc("-master fishing"); PX.wait_probe(env, 1)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing"), "loss 1 healed")
+      PX.wait_probe(env, 3)
+      -- phase 2: two more losses, each followed by ONE healthy check only
+      for i = 2, 3 do
+         srv:run_nc("-master fishing"); PX.wait_probe(env, 1)
+         r:check(Auto(env).IsRunning() and srv:has("master fishing"), "loss " .. i .. " (counted as 1 and 2 after the reset): healed, still running")
+         PX.wait_probe(env, 1)
+      end
+      srv:run_nc("-master fishing"); PX.wait_probe(env, 1)
+      r:check(not Auto(env).IsRunning(), "the next loss is the third without a healthy streak in between: the run ends")
+      r:check(chat_has(env, "ended fishing by itself"), "with the reason")
+   end)
+
+-- [Cf4+Cf5 together, Wd11, Wd12, Wd13, Ev2] timing of the health check
+scenario("auto-health-timing",
+   "the first health check comes IdleSeconds after the start was confirmed, a catch postpones it, and after a check the next one is IdleSeconds away (no flood)",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      env.G.FishingBuddy.SetSetting("AutoFishIdleSeconds", 20)
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      r:check(PX.until_step(env, "run"), "precondition: confirmed")
+      env:clear_sent()
+      env:advance(15, 0.1)
+      r:check(count_sent(env, "nc ?") == 0, "15 s after the confirmation (idle limit 20 s): no probe yet", "probes: " .. count_sent(env, "nc ?"))
+      env:advance(12, 0.1)
+      r:check(count_sent(env, "nc ?") >= 1, "27 s after the confirmation: the bot has been asked", "probes: " .. count_sent(env, "nc ?"))
+      local n0 = count_sent(env, "nc ?")
+      env:advance(100, 0.5)
+      local n1 = count_sent(env, "nc ?") - n0
+      r:check(n1 >= 2 and n1 <= 7, "over the next 100 s the checks are spaced by the idle limit, not sent every tick", "probes: " .. n1)
+      -- a catch every 10 s keeps the bot from being asked at all
+      env:clear_sent()
+      for _ = 1, 12 do
+         env.world.loot = { 13754 }; env.world.loot_is_fishing = true
+         env:fire("LOOT_OPENED")
+         env:advance(10, 0.5)
+      end
+      r:check(count_sent(env, "nc ?") == 0, "with a catch every 10 s there is no health check", "probes: " .. count_sent(env, "nc ?"))
+      no_errors(r, env)
+   end)
+
+-- [St5, K15] a check that gets no answer must not switch the checks off
+scenario("auto-no-reply-checks-continue",
+   "the client never shows the bot's answers: the health checks keep coming (every ~20 s), they do not stop after the first unanswered one",
+   function(r)
+      local env = boot{ bom = "strip", server = { reply_visible = false } }
+      r.env = env
+      env.G.FishingBuddy.SetSetting("AutoFishIdleSeconds", 15)
+      start(env, 60)
+      local n0 = count_sent(env, "nc ?")
+      env:advance(200, 0.5)
+      local n = count_sent(env, "nc ?") - n0
+      r:check(n >= 5, "at least five more probes in 200 s", "probes: " .. n)
+      r:check(Auto(env).IsRunning(), "still running")
+      no_errors(r, env)
+   end)
+
+-- [K14] a slow connection: the answer to a health check comes after > 2 s
+scenario("auto-slow-heal",
+   "slow connection (1.5 s each way): a strategy lost during the run is found by the health check and set again",
+   function(r)
+      local env = boot{ bom = "strip", server = { latency = 1.5 } }
+      r.env = env
+      local srv = env.server
+      env.G.FishingBuddy.SetSetting("AutoFishIdleSeconds", 15)
+      start(env, 80)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing"), "precondition: running with the strategy")
+      srv:run_nc("-master fishing")
+      env:advance(100, 0.5)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing"), "healed although every answer takes about 3 s")
+      no_errors(r, env)
+   end)
+
+-- [K25, Sk6] the stop sequence repeats the removal every STOP_REPROBE seconds, not in a flood
+scenario("auto-stop-resend-rate",
+   "the bot never answers the removal: the same command is repeated every ~3 s for 24 s (about 8 times), not hundreds of times",
+   function(r)
+      local env = boot{ bom = "strip", server = { reply_visible = false } }
+      r.env = env
+      start(env, 60)
+      env:clear_sent()
+      stop(env, 40)
+      local n = count_sent(env, "nc +mount,-master fishing,?")
+      r:check(n >= 5 and n <= 10, "5..10 sends of the removal in the stop wait", "sends: " .. n)
+      r:check(not env.server.active, "afterwards the bot is switched off")
+      no_collapse(r, env)
+   end)
+
+-- [Se9, Se10] Stop pressed while a health check is in flight: the stale answer must not end the stop sequence early
+scenario("auto-stop-with-check-in-flight",
+   "Stop right after a health check was sent: its (old) answer arrives during the stop sequence and must not be taken for the confirmation; the removal still reaches the bot",
+   function(r)
+      -- (a) no -mount involved: the stale answer still lists 'master fishing'
+      local env = boot{ bom = "strip" }
+      r.env = env
+      env.G.FishingBuddy.SetSetting("AutoFishIdleSeconds", 15)
+      env.G.FishingBuddy.SetSetting("AutoFishNoMount", 0)
+      start(env, 60)
+      PX.stop_with_check_in_flight(env)
+      r:check(not env.server.active, "[a] the bot is switched off")
+      r:check(env.server.persisted and not env.server.persisted["master fishing"], "[a] the strategy is gone from the stored set (the removal was not lost by an early switch-off)")
+      -- (b) the bot had dropped the strategy itself and '-mount' was applied: the stale answer lists neither
+      local env2 = boot{ bom = "strip", server = { end_fishing_after = 6.0 } }
+      env2.G.FishingBuddy.SetSetting("AutoFishIdleSeconds", 15)
+      start(env2, 20)
+      PX.stop_with_check_in_flight(env2)
+      r:check(not env2.server.active, "[b] the bot is switched off")
+      r:check(env2.server.persisted and env2.server.persisted["mount"] and not env2.server.persisted["master fishing"], "[b] 'mount' was restored in the stored set")
+      no_errors(r, env2)
+   end)
+
+-- [E01-E05, S01, S06, H03, H05, C02, C04, B04, N01, N02, Sx6] what a hand-edited command block can contain
+scenario("auto-custom-block-lines",
+   "an edited block: '/w OTHER' goes to that player, '/1' to the channel, dot lines are SAY, unknown slashes go through the chat box, "
+   .. "own-name / case variants are merged into the one nc command, stray commas make no empty op, a '/p' line warns once per run",
+   function(r)
+      local block = table.concat({
+         "-- a comment must never be spoken aloud",
+         "/w testchar nc +master fishing",
+         "/W %p co +loot",
+         "/w %p nc +gather, ,+loot",
+         "/w Somebody hello there",
+         "/1 trade hello",
+         ".server info",
+         "/dance now",
+      }, "\n")
+      local saved = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishStartCommands = block }, Outfit = {}, WasWearing = {} } }
+      local env = boot{ bom = "strip", saved = saved }
+      r.env = env
+      local srv = env.server
+      start(env)
+      local joined = table.concat(sent_texts(env), " | ")
+      r:check(srv:has("master fishing"), "the strategy arrived", joined)
+      r:check(count_sent(env, "nc ?,-mount,+master fishing,+gather,+loot,?") == 1,
+              "both own-name lines (lower-case name, empty op in between) were merged into the single nc command", joined)
+      r:check(count_sent_matching(env, ",,") == 0, "no empty op", joined)
+      local seen = {}
+      for _, e in ipairs(env.sent) do seen[e.text] = e end
+      r:check(seen["-- a comment must never be spoken aloud"] == nil, "the comment line was not sent", joined)
+      r:check(seen["hello there"] and seen["hello there"].chattype == "WHISPER" and seen["hello there"].target == "Somebody",
+              "'/w Somebody ...' went to Somebody", joined)
+      r:check(count_sent(env, "hello there") == 1, "and only once (not to oneself)")
+      r:check(seen["trade hello"] and seen["trade hello"].chattype == "CHANNEL" and seen["trade hello"].target == 1,
+              "'/1 ...' went to channel number 1", joined)
+      r:check(seen[".server info"] and seen[".server info"].chattype == "SAY", "a dot line is sent as SAY", joined)
+      local boxed = table.concat(env.sent_by_chatbox or {}, " | ")
+      r:check(boxed:find("/dance now", 1, true) ~= nil, "an unknown slash command goes through the chat box", boxed)
+      r:check(not table.concat(env.chat_display, "\n"):find("co +loot", 1, true), "the echo of '/W %p co +loot' (upper-case slash word) is recognised as own and hidden")
+      no_collapse(r, env)
+      -- raid only (GetNumPartyMembers() == 0): '/p' is real group chat, not a line to oneself
+      local saved2 = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishStartCommands = "/w %p nc +master fishing\n/p hello raid" }, Outfit = {}, WasWearing = {} } }
+      local env2 = boot{ bom = "strip", saved = saved2, world = { raid = 5 } }
+      start(env2)
+      r:check(sent_type(env2, "PARTY") == 1 and count_sent(env2, "hello raid") == 1, "in a raid '/p' is sent as party chat")
+      -- a stop block without any nc line, sent in the quick (logout) form: nothing like 'nc ' is sent
+      local saved3 = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishStopCommands = "/w %p co -loot" }, Outfit = {}, WasWearing = {} } }
+      local env3 = boot{ bom = "strip", saved = saved3, server = { active = true, persisted = { "nc", "chat", "follow", "default" } } }
+      env3:advance(15, 0.5)
+      start(env3, 30)
+      env3:clear_sent()
+      env3:fire("PLAYER_LOGOUT")
+      r:check(count_sent(env3, "co -loot") == 1 and count_sent_matching(env3, "nc") == 0, "quick stop with a block without nc: no empty 'nc ' command",
+              table.concat(sent_texts(env3), " | "))
+      -- '/p' lines while ungrouped: the warning appears once per run, even for several lines, and again in the next run
+      local saved4 = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishStartCommands = "/p nc +master fishing" }, Outfit = {}, WasWearing = {} } }
+      local env4 = boot{ bom = "strip", saved = saved4 }
+      start(env4)
+      r:check(PX.chat_count(env4, "not in a group") == 1, "[only an nc line] warned once", PX.chat_count(env4, "not in a group") .. " warnings")
+      stop(env4)
+      start(env4)
+      r:check(PX.chat_count(env4, "not in a group") == 2, "the next run warns again", PX.chat_count(env4, "not in a group") .. " warnings")
+      local saved5 = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishStartCommands = "/p nc +master fishing\n/p co +loot\n/p co +aoe" }, Outfit = {}, WasWearing = {} } }
+      local env5 = boot{ bom = "strip", saved = saved5 }
+      start(env5)
+      r:check(PX.chat_count(env5, "not in a group") == 1, "[three /p lines] warned once", PX.chat_count(env5, "not in a group") .. " warnings")
+   end)
+
+-- [E01, G05, G03] legacy toggle lines in every spelling; a block that is nothing but a toggle line; comments in the lure block
+scenario("auto-legacy-toggle-lines",
+   "'.playerbots bot self' in any spelling is dropped from a stored block; a Stop block that was only that line falls back to the default - also for the quick logout form; "
+   .. "a whitespace-only block shows the default in the editor",
+   function(r)
+      local saved = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = {
+         AutoFishStartCommands = ".playerbot bot self\n.PLAYERBOTS BOT SELF\n/w %p nc +master fishing",
+         AutoFishStopCommands = ".playerbots bot self",
+         AutoFishKeepAliveCommands = "   \n  ",
+      }, Outfit = {}, WasWearing = {} } }
+      local env = boot{ bom = "strip", saved = saved }
+      r.env = env
+      local srv = env.server
+      start(env)
+      r:check(srv.toggles == 1 and srv:has("master fishing"), "no extra toggle from the legacy spellings", "toggles: " .. srv.toggles)
+      r:check(count_sent(env, ".playerbot bot self") == 0 and count_sent(env, ".PLAYERBOTS BOT SELF") == 0, "the legacy lines were not sent as chat")
+      stop(env)
+      r:check(srv.persisted and not srv.persisted["master fishing"], "the Stop block that held only the toggle line fell back to the default: strategy removed")
+      r:check(not srv.active, "bot off again")
+      Auto(env).ShowEditor()
+      local ed = env.G.FishingAutoEditor
+      r:check(ed and ed.boxes[2]:GetText() == "/w %p nc +master fishing", "a whitespace-only stored block shows the default in the editor", ed and ed.boxes[2]:GetText() or "no editor")
+      no_errors(r, env)
+      -- the quick form is sent only once: the very first use of the cleaned Stop block must already be the default
+      local saved2 = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishStopCommands = ".playerbots bot self" }, Outfit = {}, WasWearing = {} } }
+      local env2 = boot{ bom = "strip", saved = saved2 }
+      start(env2)
+      env2:clear_sent()
+      env2:fire("PLAYER_LOGOUT")
+      r:check(sent_texts(env2)[1] == "WHISPER:nc +mount,-master fishing", "logout with a toggle-only Stop block still sends the default removal", table.concat(sent_texts(env2), " | "))
+   end)
+
+-- [Wd1, Hl2, Hl3, Hl4, E01] the lure logic runs only during a run; the lure line carries the item link; retries are spaced
+scenario("auto-lure-idle",
+   "a missing lure with a lure in the bags: nothing is sent while Auto fishing is off; during a run the command carries the item link, "
+   .. "retries are 20 s apart, a comment line in the lure block is not spoken, the option 'let the bot apply the lure' off falls back to a warning",
+   function(r)
+      local env = boot{ bom = "strip", world = { bags_have_lure = true, lure_seconds = 0 } }
+      r.env = env
+      env:clear_sent()
+      env:advance(120, 0.5)
+      r:check(#env.sent == 0, "auto fishing off: the watchdog sends nothing", table.concat(sent_texts(env), " | "))
+      env.G.FishingBuddy.SetSetting("AutoFishLureCommands", "-- apply the lure\n/w %p u %l")
+      start(env, 100)
+      local times, line = {}, nil
+      for _, e in ipairs(env.sent) do
+         if e.text:find("^u ") then line = line or e.text; times[#times + 1] = e.t end
+      end
+      r:check(line and line:find("|Hitem:", 1, true) ~= nil, "the lure command carries an item link", tostring(line))
+      r:check(#times == 3 and times[2] - times[1] >= 19 and times[3] - times[2] >= 19, "three attempts, at least 19 s apart", #times .. " attempts")
+      for _, e in ipairs(env.sent) do
+         if e.text:find("apply the lure", 1, true) then r:check(false, "the comment line was spoken", e.chattype .. ":" .. e.text) end
+      end
+      -- option off: no lure command, a warning instead
+      local env2 = boot{ bom = "strip", world = { bags_have_lure = true, lure_seconds = 0 } }
+      env2.G.FishingBuddy.SetSetting("AutoFishAutoLure", 0)
+      start(env2, 60)
+      local lines = 0
+      for _, e in ipairs(env2.sent) do if e.text:find("^u ") then lines = lines + 1 end end
+      r:check(lines == 0, "[option off] the bot is not asked to apply the lure", lines .. " lines")
+      r:check(PX.chat_count(env2, "lure") >= 1, "[option off] the player is warned instead")
+      no_errors(r, env)
+   end)
+
+-- [Wd2, Wd3, Wd5-Wd10, Ev8, Ev9, Op3, Op4, Op5] the watchdog's stop conditions and options
+scenario("auto-watchdog-stops",
+   "time limit, death, combat (event and watchdog), full bags (exactly at the limit) and the options that disable them",
+   function(r)
+      local function fresh(setup)
+         local env = boot{ bom = "strip" }
+         if setup then setup(env) end
+         start(env, 45)
+         return env
+      end
+      -- time limit: 1 minute
+      local env = fresh(function(e) e.G.FishingBuddy.SetSetting("AutoFishMaxMinutes", 1) end)
+      r.env = env
+      r:check(Auto(env).IsRunning(), "[time limit 1 min] still running 45 s after the start")
+      env:advance(10, 0.5)
+      r:check(Auto(env).IsRunning(), "[time limit 1 min] still running after 55 s")
+      env:advance(12, 0.5)
+      r:check(not Auto(env).IsRunning() and chat_has(env, "time limit reached"), "[time limit 1 min] stopped after 67 s with the reason")
+      -- dead
+      env = fresh()
+      env.world.dead = true
+      env:advance(5, 0.5)
+      r:check(not Auto(env).IsRunning() and chat_has(env, "you died"), "[dead] the watchdog stops the run")
+      env = fresh()
+      env:fire("PLAYER_DEAD")
+      r:check(not Auto(env).IsRunning(), "[PLAYER_DEAD] the event stops the run at once")
+      -- combat
+      env = fresh()
+      env.world.combat = true
+      env:advance(5, 0.5)
+      r:check(not Auto(env).IsRunning() and chat_has(env, "combat"), "[combat] the watchdog stops the run")
+      env = fresh()
+      env:fire("PLAYER_REGEN_DISABLED")
+      r:check(not Auto(env).IsRunning(), "[PLAYER_REGEN_DISABLED] the event stops the run at once")
+      env = fresh(function(e) e.G.FishingBuddy.SetSetting("AutoFishStopInCombat", 0) end)
+      env.world.combat = true
+      env:fire("PLAYER_REGEN_DISABLED")
+      env:advance(10, 0.5)
+      r:check(Auto(env).IsRunning(), "[combat, option off] the run goes on")
+      -- bags: 2 free slots = the default limit -> stop; 3 -> go on
+      env = fresh()
+      env.world.free_slots = { [0] = 2, 0, 0, 0, 0 }
+      env:advance(5, 0.5)
+      r:check(not Auto(env).IsRunning() and chat_has(env, "bags full"), "[bags] stopped at exactly the limit (2 free)")
+      env = fresh()
+      env.world.free_slots = { [0] = 3, 0, 0, 0, 0 }
+      env:advance(5, 0.5)
+      r:check(Auto(env).IsRunning(), "[bags] 3 free slots: the run goes on")
+      env = fresh(function(e) e.G.FishingBuddy.SetSetting("AutoFishStopBagsFull", 0) end)
+      env.world.free_slots = { [0] = 1, 0, 0, 0, 0 }
+      env:advance(70, 0.5)
+      r:check(Auto(env).IsRunning(), "[bags, option off] the run goes on")
+      r:check(PX.chat_count(env, "free bag slots") >= 1 and PX.chat_count(env, "free bag slots") <= 4, "... with a warning about every 30 s, not on every tick", PX.chat_count(env, "free bag slots") .. " warnings")
+      -- keep-alive option off: the bot is never asked
+      env = fresh(function(e) e.G.FishingBuddy.SetSetting("AutoFishKeepAlive", 0); e.G.FishingBuddy.SetSetting("AutoFishIdleSeconds", 15) end)
+      env:clear_sent()
+      env:advance(120, 0.5)
+      r:check(count_sent(env, "nc ?") == 0, "[keep-alive off] no health checks", "probes: " .. count_sent(env, "nc ?"))
+      -- pole taken off: the DISABLED event stops the run at once
+      env = fresh()
+      env.world.pole_equipped = false
+      env:fire("ITEM_LOCK_CHANGED")
+      env:fire("PLAYER_EQUIPMENT_CHANGED", 16)
+      r:check(not Auto(env).IsRunning(), "[pole removed] the run stops with the equipment event, not only at the next watchdog tick")
+   end)
+
+-- [Sx5, Sx6/Sx7 in the scenarios above, Ev1] counters start afresh with every run
+scenario("auto-second-run",
+   "the catch count adds up quantities and a second run starts with a fresh count",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      start(env)
+      for _ = 1, 2 do
+         env.world.loot = { 13754 }; env.world.loot_is_fishing = true
+         env:fire("LOOT_OPENED"); env:advance(1, 0.5)
+      end
+      env.G.FishingBuddy.RunHandlers(env.G.FBConstants.ADD_FISHIE_EVT, 13754, "Raw Glossy Mightfish", "z", "s", "tex", 3)
+      env:call("Auto.Stop", Auto(env).Stop)
+      r:check(chat_has(env, "caught 5"), "run 1 reports 2 catches + a stack of 3", table.concat(env.chat, " | "))
+      env:advance(35, 0.1)
+      start(env)
+      env.chat = {}
+      env:slash("/fb auto status")
+      r:check(chat_has(env, "caught 0"), "run 2 starts at 0 catches", table.concat(env.chat, " | "))
+   end)
+
+-- [Sx1, Sx2] Start while running / while the stop sequence is still pending
+scenario("auto-start-guards",
+   "'/fb auto on' while running changes nothing; Toggle during the stop sequence is refused with a hint",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local srv = env.server
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      env:advance(1, 0.1)
+      local n = #env.sent
+      env:slash("/fb auto on")
+      r:check(#env.sent == n, "Start while running sends nothing", (#env.sent - n) .. " extra lines")
+      env:advance(45, 0.1)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing") and srv.toggles == 1, "one session, one toggle")
+      env:call("Auto.Stop", Auto(env).Stop)
+      r:check(Auto(env).GetState().stopping, "precondition: the stop sequence is pending")
+      r:check(Auto(env).GetState().ownsBot, "the state still says that the bot is ours while it is being stopped")
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      r:check(not Auto(env).IsRunning(), "Toggle during the stop sequence does not start a new run")
+      r:check(chat_has(env, "still being stopped"), "and says why")
+      env:advance(35, 0.1)
+      r:check(not srv.active and not srv:has("master fishing"), "the stop sequence ended cleanly")
+      no_errors(r, env)
+   end)
+
+-- [Sx3] a failing START handler must not derail Start (otherwise the first probe is never sent and an already running bot is toggled OFF)
+scenario("auto-start-handler-error",
+   "an error in another addon's AUTO_START_EVT handler must not abort Start: the bot that was already on is not toggled",
+   function(r)
+      local env = boot{ bom = "strip", server = { selfbot_level = 3, login_auto = true } }
+      r.env = env
+      local srv = env.server
+      env:advance(15, 0.5)
+      env.G.FishingBuddy.API.RegisterHandlers({ [env.G.FBConstants.AUTO_START_EVT] = function() error("start handler exploded") end })
+      start(env, 30)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing"), "running with the strategy")
+      r:check(srv.toggles == 0, "the bot that was on was not toggled", "toggles: " .. srv.toggles)
+      r:check(#env.errors == 0, "no Lua error escaped from Start", #env.errors > 0 and env.errors[1].message or nil)
+   end)
+
+-- [Sk3, Se4, Se5] Stop while the toggle is in flight: the stop sequence ends as soon as the answer is in, or by itself if there is none
+scenario("auto-toggle-no-answer-stop",
+   "Stop while '.playerbots bot self' is in flight: whichever answer comes (refusal, switched off) ends the stop sequence and releases Botpad at once; with no answer at all it ends by itself",
+   function(r)
+      -- nobody answers
+      local env = boot{ bom = "strip", server = { module_missing = true } }
+      r.env = env
+      local BP = Server.install_botpad_stub(env, true)
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      env:advance(3.02, 0.01)
+      r:check(Auto(env).GetState().step == "toggle", "precondition: toggle sent", Auto(env).GetState().step)
+      env:call("Auto.Stop", Auto(env).Stop)
+      env:advance(10, 0.1)
+      r:check(not Auto(env).GetState().stopping and Auto(env).GetState().step == "idle", "[no answer] the stop sequence ended", Auto(env).GetState().step)
+      r:check(next(BP.Bot.holders) == nil, "[no answer] Botpad was released")
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      r:check(Auto(env).IsRunning(), "[no answer] a new Start is possible afterwards")
+      no_errors(r, env)
+      -- refused
+      local env2 = boot{ bom = "strip", server = { selfbot_level = 0 } }
+      local BP2 = Server.install_botpad_stub(env2, true)
+      env2:call("Auto.Toggle", Auto(env2).Toggle)
+      env2:advance(3.02, 0.01)
+      env2:call("Auto.Stop", Auto(env2).Stop)
+      env2:advance(0.4, 0.05)
+      r:check(not Auto(env2).GetState().stopping and next(BP2.Bot.holders) == nil, "[refused] the answer ends the stop sequence and releases Botpad at once")
+      -- the bot was on and is switched OFF by the toggle
+      local env3 = boot{ bom = "strip" }
+      local BP3 = Server.install_botpad_stub(env3, true)
+      env3.server:activate(true)
+      env3.server.nc.chat = nil                              -- on, but does not answer the probe
+      env3:call("Auto.Toggle", Auto(env3).Toggle)
+      env3:advance(3.02, 0.01)
+      env3:call("Auto.Stop", Auto(env3).Stop)
+      env3:advance(0.5, 0.05)
+      r:check(not Auto(env3).GetState().stopping and next(BP3.Bot.holders) == nil, "[switched off] the undo is sent, the stop sequence ends and Botpad is released at once")
+   end)
+
+-- [Se14] the refusal of the whispers arrives late (slow link): it is recognised in the apply step too
+scenario("auto-whispers-blocked-slow",
+   "GM account without '.whispers on' on a slow link (3.5 s each way): the refusal of the later strategy command is still recognised and explained",
+   function(r)
+      local env = boot{ bom = "strip", server = { selfbot_level = 1, gm = true, whisper_filter = true, latency = 3.5 } }
+      r.env = env
+      start(env, 40)
+      r:check(not Auto(env).IsRunning(), "not running")
+      r:check(chat_has(env, ".whispers on"), "the message names '.whispers on'")
+   end)
+
+-- [Rs2] the cleanup after /reload must not disturb a run the player has already started
+scenario("auto-resume-while-running",
+   "the post-login cleanup finds a run in progress: it clears its flag and does nothing else (no extra probe, Botpad stays held)",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local BP = Server.install_botpad_stub(env, true)
+      env.G.FishingBuddy_Player.Settings.AutoFishPending = { ownsBot = true, restore = true }
+      env:fire("PLAYER_LOGIN")
+      start(env, 2)
+      env:advance(10, 0.1)
+      r:check(env.G.FishingBuddy_Player.Settings.AutoFishPending == nil, "pending flag cleared")
+      r:check(count_sent(env, "nc ?") == 1, "no second probe from the cleanup", "probes: " .. count_sent(env, "nc ?"))
+      r:check(BP.Bot.holders["Fishing Buddy"], "Botpad is still held")
+      r:check(not Auto(env).GetState().stopping, "no stop sequence was started")
+      env:advance(45, 0.1)
+      r:check(Auto(env).IsRunning() and env.server:has("master fishing"), "the run went on normally")
+      no_errors(r, env)
+   end)
+
+-- [Sk2, Rs4] the cleanup after login: scheduled ~6 s after login, and it ends by itself when the bot is off
+scenario("auto-resume-no-answer",
+   "pending cleanup but the self bot is off: the probe goes out ~6 s after login (not at once), nothing is toggled, and the addon is idle (Start possible) afterwards",
+   function(r)
+      local saved = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishPending = { ownsBot = true, restore = true } }, Outfit = {}, WasWearing = {} } }
+      local env = boot{ bom = "strip", saved = saved }
+      r.env = env
+      env:advance(5, 0.1)
+      r:check(count_sent(env, "nc ?") == 0, "no cleanup probe in the first 5 s after login", "probes: " .. count_sent(env, "nc ?"))
+      env:advance(3, 0.1)
+      r:check(count_sent(env, "nc ?") == 1, "the probe is out after ~6 s", "probes: " .. count_sent(env, "nc ?"))
+      env:advance(30, 0.1)
+      r:check(not Auto(env).GetState().stopping and Auto(env).GetState().step == "idle", "the cleanup ended (nobody answered)", Auto(env).GetState().step)
+      r:check(env.server.toggles == 0, "and nothing was toggled", "toggles: " .. env.server.toggles)
+      local kept = env.G.FishingBuddy_Player.Settings.AutoFishPending
+      r:check(type(kept) == "table" and kept.tries == 1, "the note stays for the next login (tries = 1)")
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      r:check(Auto(env).IsRunning(), "a Start is possible")
+      no_errors(r, env)
+   end)
+
+-- [Bs6, Bs7, Se6] a bot that is not ours still gets its 'mount' back after a logout
+scenario("auto-pending-restore",
+   "logout during a run on a bot that was already on: a cleanup is saved (restore only); the next session puts 'mount' back even if 'master fishing' is gone",
+   function(r)
+      local env = boot{ bom = "strip", server = { selfbot_level = 3, login_auto = true } }
+      r.env = env
+      env:advance(15, 0.5)
+      start(env, 30)
+      env:fire("PLAYER_LOGOUT")
+      local pend = env.G.FishingBuddy_Player.Settings.AutoFishPending
+      r:check(type(pend) == "table" and pend.ownsBot == false and pend.restore == true, "cleanup saved although the bot is not ours")
+      -- next session: the bot is on, its stored set has neither 'master fishing' nor 'mount'
+      local saved = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishPending = { ownsBot = false, restore = true } }, Outfit = {}, WasWearing = {} } }
+      local env2 = boot{ bom = "strip", saved = saved, server = { active = true, persisted = { "nc", "chat", "follow", "default" } } }
+      env2:advance(30, 0.1)
+      r:check(env2.server:has("mount"), "'mount' was restored", table.concat(env2.server:strategies(), ", "))
+      r:check(env2.server.active, "the bot (not ours) stays on")
+      r:check(env2.G.FishingBuddy_Player.Settings.AutoFishPending == nil, "flag cleared")
+      no_errors(r, env2)
+   end)
+
+-- [Bs2, Bs3] 'mount' is restored only if it was there AND we removed it
+scenario("auto-cold-no-mount",
+   "cold start of a bot whose stored strategies do not include 'mount': Stop does not add it; with the option 'keep the bot from mounting' off Stop does not add it either",
+   function(r)
+      local env = boot{ bom = "strip", server = { persisted = { "nc", "chat", "follow", "default" } } }
+      r.env = env
+      local srv = env.server
+      start(env)
+      stop(env)
+      r:check(count_sent(env, "nc -master fishing,?") == 1, "the removal carries no '+mount'", table.concat(sent_texts(env), " | "))
+      r:check(srv.persisted and not srv.persisted["mount"] and not srv.persisted["master fishing"], "the stored set is as it was")
+      no_collapse(r, env)
+      local env2 = boot{ bom = "strip" }
+      env2.G.FishingBuddy.SetSetting("AutoFishNoMount", 0)
+      start(env2)
+      stop(env2)
+      r:check(count_sent(env2, "nc -master fishing,?") == 1 and count_sent_matching(env2, "+mount") == 0, "[option off] 'mount' was never removed, so Stop does not send '+mount'", table.concat(sent_texts(env2), " | "))
+   end)
+
+-- [O01, O02, O04] the older / alternative server texts
+scenario("auto-legacy-messages",
+   "older server texts for the self bot switching on / off / being refused are understood",
+   function(r)
+      for _, phrase in ipairs{ "Enable player botAI", "Playerbot AI enabled" } do
+         local env = boot{ bom = "strip", server = { module_missing = true } }
+         env:call("Auto.Toggle", Auto(env).Toggle)
+         env:advance(3.1, 0.1)
+         env:chat_event("CHAT_MSG_SYSTEM", phrase)
+         r:check(Auto(env).GetState().step == "settle", "'" .. phrase .. "' counts as 'on'", Auto(env).GetState().step)
+      end
+      for _, phrase in ipairs{ "Disable player botAI", "Playerbot AI disabled" } do
+         local env = boot{ bom = "strip", server = { module_missing = true } }
+         env:call("Auto.Toggle", Auto(env).Toggle)
+         env:advance(3.1, 0.1)
+         env:chat_event("CHAT_MSG_SYSTEM", phrase)
+         r:check(count_sent(env, ".playerbots bot self") == 2, "'" .. phrase .. "' counts as 'off' (the toggle is repeated once)", "toggles sent: " .. count_sent(env, ".playerbots bot self"))
+      end
+      local env = boot{ bom = "strip", server = { module_missing = true } }
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      env:advance(3.1, 0.1)
+      env:chat_event("CHAT_MSG_SYSTEM", "You cannot control bots yet.")
+      r:check(not Auto(env).IsRunning() and chat_has(env, "refuses"), "'You cannot control bots yet' is a refusal")
+   end)
+
+-- [Bs12, O05] a refused start leaves nothing behind
+scenario("auto-refused-quiet",
+   "a refused start gives one message and one alert -- no 'stopped' line, no summary --, the addon knows the bot is off, and Botpad is not left held",
+   function(r)
+      local env = boot{ bom = "strip", server = { selfbot_level = 0 } }
+      r.env = env
+      start(env, 20)
+      r:check(not Auto(env).IsRunning(), "not running")
+      r:check(not chat_has(env, "Auto fishing stopped") and not chat_has(env, "Ran for"), "no 'stopped' line and no run summary after a failed start")
+      r:check(#(env.sounds or {}) == 1, "exactly one alert sound", #(env.sounds or {}) .. " sounds")
+      r:check(Auto(env).GetState().selfState == false, "the addon records that the self bot is off", tostring(Auto(env).GetState().selfState))
+      -- a refusal that arrives before the toggle (whispers to oneself blocked): Botpad must be released at once
+      local env2 = boot{ bom = "strip", server = { selfbot_level = 1, gm = true, whisper_filter = true } }
+      local BP2 = Server.install_botpad_stub(env2, true)
+      start(env2, 2)
+      r:check(not Auto(env2).IsRunning(), "[whispers blocked] not running")
+      r:check(next(BP2.Bot.holders) == nil, "[whispers blocked] Botpad is not left held")
+      r:check(not Auto(env2).GetState().stopping, "[whispers blocked] nothing is pending")
+   end)
+
+-- [Cf8, N03, Cf11] an ordinary run is quiet, and plays exactly its two alerts
+scenario("auto-clean-run-quiet",
+   "an ordinary solo run prints no warning at all (clash, mounted, pole, Botpad, party line, toggle line), plays one alert at the start and one at the stop",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      start(env, 60)
+      stop(env)
+      for _, needle in ipairs{ "Other bot strategies", "You are mounted", "reports that it has no fishing pole", "Botpad before 1.3",
+                               "not in a group", "Removed '.playerbots", "did not answer", "refuses", "No catch for a while" } do
+         r:check(PX.chat_count(env, needle) == 0, "no '" .. needle .. "' message")
+      end
+      r:check(PX.chat_count(env, "Auto fishing started") == 1 and PX.chat_count(env, "Auto fishing stopped") == 1, "one 'started' and one 'stopped'")
+      r:check(PX.chat_count(env, "Starting auto fishing") == 1, "the start is announced once")
+      r:check(#(env.sounds or {}) == 2, "two alert sounds (confirmed, stopped)", #(env.sounds or {}) .. " sounds")
+   end)
+
+scenario("auto-clash-strategies",
+   "every strategy that fights with fishing is named in the warning",
+   function(r)
+      local env = boot{ bom = "strip", server = { active = true, persisted = { "nc", "chat", "follow", "default", "grind", "rpg", "new rpg", "travel", "mount" } } }
+      r.env = env
+      start(env, 30)
+      r:check(chat_has(env, "(grind, rpg, new rpg, travel)"), "grind, rpg, new rpg and travel are all listed")
+   end)
+
+-- [Cf10, Wd16] the 'mounted' warning is rate limited
+scenario("auto-mounted-warning-rate",
+   "mounted although the option 'keep the bot from mounting' is off: the warning is repeated about once a minute, not every tick; mounting during the start warns once",
+   function(r)
+      local env = boot{ bom = "strip", server = { mount_owned = true } }
+      r.env = env
+      env.G.FishingBuddy.SetSetting("AutoFishNoMount", 0)
+      start(env, 40)
+      env:advance(120, 0.5)
+      r:check(env.world.mounted, "precondition: the model mounted the character")
+      local n = PX.chat_count(env, "You are mounted")
+      r:check(n >= 1 and n <= 4, "1..4 warnings in 160 s", n .. " warnings")
+      -- the player mounts while the start is under way: the confirmation warns, the watchdog does not repeat it at once
+      local env2 = boot{ bom = "strip" }
+      env2:call("Auto.Toggle", Auto(env2).Toggle)
+      env2:advance(5, 0.1)
+      env2.world.mounted = true
+      env2:advance(60, 0.5)
+      r:check(PX.chat_count(env2, "You are mounted") == 1, "mounted during the start: exactly one warning in the first minute", PX.chat_count(env2, "You are mounted") .. " warnings")
+   end)
+
+-- [K04] the player is already fishing by hand when pressing the button, the bot is off
+scenario("auto-channeling-bot-off",
+   "the character is channelling (fishing by hand) and the bot is off: the start still switches the bot on within ~25 s",
+   function(r)
+      local env = boot{ bom = "strip", world = { channeling = true } }
+      r.env = env
+      start(env, 40)
+      r:check(env.server.toggles == 1 and env.server.active, "the bot was switched on", "toggles: " .. env.server.toggles)
+      r:check(Auto(env).IsRunning() and env.server:has("master fishing"), "and fishes")
+   end)
+
+-- [K07, K09, P13] how long a start takes
+scenario("auto-start-latency",
+   "start latency against the model: bot already awake <= 6 s; bot off <= 17 s; bot off behind an old Botpad <= 25 s (and no 'old Botpad' warning outside Minimal mode)",
+   function(r)
+      local env = boot{ bom = "strip", server = { selfbot_level = 3, login_auto = true } }
+      r.env = env
+      env:advance(15, 0.5)
+      start(env, 6)
+      r:check(Auto(env).GetState().step == "run", "[awake bot] confirmed within 6 s", Auto(env).GetState().step)
+      local env2 = boot{ bom = "strip" }
+      start(env2, 17)
+      r:check(Auto(env2).GetState().step == "run", "[bot off] confirmed within 17 s", Auto(env2).GetState().step)
+      local env3 = boot{ bom = "strip" }
+      Server.install_botpad_stub(env3, false)
+      env3.G.BotpadDB = { Mode = "normal" }
+      start(env3, 25)
+      r:check(Auto(env3).GetState().step == "run" and env3.server:has("master fishing"), "[bot off, Botpad without Hold] confirmed within 25 s", Auto(env3).GetState().step)
+      r:check(PX.chat_count(env3, "Botpad before 1.3") == 0, "[Botpad without Hold, mode normal] no Minimal-mode warning")
+   end)
+
+-- [K10, K11, K12, K13, K16, K17, A14] retry spacing
+scenario("auto-retry-timing",
+   "a bot that never accepts the strategy: the second attempt follows ~28 s after the first, the third ~23 s after the second",
+   function(r)
+      local env = boot{ bom = "strip", server = { ignore_fishing = true } }
+      r.env = env
+      start(env, 90)
+      local ts = {}
+      for _, e in ipairs(env.sent) do
+         if e.text:find("+master fishing", 1, true) then ts[#ts + 1] = e.t end
+      end
+      r:check(#ts == 3, "three attempts", #ts .. " attempts")
+      if #ts == 3 then
+         local g1, g2 = ts[2] - ts[1], ts[3] - ts[2]
+         r:check(g1 >= 26 and g1 <= 31, "1st -> 2nd attempt: cold wait 25 s + retry delay 3 s", string.format("%.1f s", g1))
+         r:check(g2 >= 21 and g2 <= 26, "2nd -> 3rd attempt: warm wait 20 s + retry delay 3 s", string.format("%.1f s", g2))
+      end
+   end)
+
+-- [Cf3] the retry counter is per problem, not per run
+scenario("auto-tries-reset",
+   "two failed attempts at the start, then success: a later loss that the bot again refuses to heal gets a fresh set of tries",
+   function(r)
+      local env = boot{ bom = "strip", server = { ignore_fishing = true } }
+      r.env = env
+      local srv = env.server
+      env.G.FishingBuddy.SetSetting("AutoFishIdleSeconds", 15)
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      local guard = 0
+      while count_sent_matching(env, "+master fishing") < 3 and guard < 20000 do env:advance(0.01, 0.01); guard = guard + 1 end
+      srv.ignore_fishing = false                             -- the third attempt is accepted
+      env:advance(5, 0.1)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing") and Auto(env).GetState().step == "run", "precondition: confirmed on the third attempt")
+      srv.ignore_fishing = true
+      srv:run_nc("-master fishing")                          -- lost again; the bot refuses to take it back
+      env:advance(55, 0.5)
+      r:check(Auto(env).IsRunning(), "55 s after the loss the addon is still trying (1 of 3 tries used, not 3 of 3)")
+   end)
+
+-- [Se20] a foreign switch-off while the probe is outstanding
+scenario("auto-foreign-off-in-probe",
+   "somebody switches the (awake) self bot off right after Start, while the probe is outstanding: the run goes on, switches the bot on itself and fishes",
+   function(r)
+      local env = boot{ bom = "strip", server = { active = true } }
+      r.env = env
+      local srv = env.server
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      env:advance(0.01, 0.01)
+      srv:toggle()
+      env:advance(60, 0.1)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing"), "running with the strategy")
+      r:check(srv.toggles == 2 and Auto(env).GetState().ownsBot, "the addon switched the bot on and owns it now", "toggles: " .. srv.toggles)
+      no_errors(r, env)
+   end)
+
+-- [St3, Se21] a bot that answered the probe but ignores the strategy command
+scenario("auto-bot-deaf-after-probe",
+   "the bot answers the probe, then stops listening (strategy 'chat' removed): the start is NOT accepted 'unverified', it fails with the strategy message",
+   function(r)
+      local env = boot{ bom = "strip", server = { active = true } }
+      r.env = env
+      local srv = env.server
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      PX.until_step(env, "apply", 5)                         -- the strategy command is on its way (the bot has not read it yet)
+      srv.nc.chat = nil
+      env:advance(100, 0.1)
+      r:check(not Auto(env).IsRunning(), "not running")
+      r:check(chat_has(env, "did not accept the strategy 'master fishing'"), "the strategy message is shown")
+      r:check(not chat_has(env, "did not answer the strategy check"), "and not the 'unverified' start")
+      r:check(srv.active, "the bot (not ours) is left on")
+   end)
+
+-- [Se23, Se24, K12] a reply that comes after the apply wait
+scenario("auto-late-apply-reply",
+   "the bot sleeps through the whole apply wait (answer after 22 s): the late answer confirms the start, the command is not sent a second time",
+   function(r)
+      local env = boot{ bom = "strip", server = { active = true } }
+      r.env = env
+      local srv = env.server
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      PX.until_step(env, "apply", 5)
+      srv.ready_at = env.now + 22
+      env:advance(60, 0.1)
+      r:check(Auto(env).IsRunning() and Auto(env).GetState().step == "run" and srv:has("master fishing"), "confirmed by the late answer")
+      r:check(count_sent_matching(env, "+master fishing") == 1, "the strategy command was sent once", "sent " .. count_sent_matching(env, "+master fishing") .. " times")
+      no_errors(r, env)
+   end)
+
+-- [K28] the diagnostic trace buffer is bounded but not tiny
+scenario("auto-trace-size",
+   "/fb auto diag keeps the last 40 trace lines",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      start(env, 60)
+      for _ = 1, 3 do stop(env); start(env, 45) end
+      local n = #Auto(env).GetTrace()
+      r:check(n == 40, "the trace holds exactly 40 lines after a long session", "lines: " .. n)
+   end)
+
+-- [F03, F04, F05, K27] the echo filter only hides the addon's own traffic, and only for a limited time
+scenario("auto-echo-window",
+   "echo hiding: a stranger's whisper is shown even right after a probe; the player's own later whispers (>30 s) are shown again",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local me = env.G.UnitName("player")
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      env:advance(1, 0.1)
+      r:check(env:chat_event("CHAT_MSG_WHISPER", "Strategies: just a stranger", "Somebody"), "a stranger's 'Strategies:' whisper is shown right after the probe")
+      r:check(env:chat_event("CHAT_MSG_WHISPER", "nc ?", "Somebody"), "a stranger's whisper that equals one of our commands is shown")
+      env:advance(45, 0.1)
+      stop(env, 40)
+      env:slash("/fb auto probe")                            -- remembers "nc ?" once more, then nothing else for two minutes
+      env:advance(120, 0.5)
+      r:check(env:chat_event("CHAT_MSG_WHISPER_INFORM", "nc ?", me), "2 minutes later the player's own 'nc ?' is no longer hidden as a leftover echo")
+      r:check(env:chat_event("CHAT_MSG_WHISPER", "Strategies: nc, chat", me), "... and neither is an old-looking 'Strategies:' answer")
+   end)
+
+-- [Y33] old defaults are recognised even with stray blanks
+scenario("auto-settings-migration-blanks",
+   "saved command blocks that hold the 0.9.9 defaults with trailing blanks / tabs / empty lines are still replaced by the new defaults",
+   function(r)
+      local saved = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = {
+         AutoFishStartCommands = "  .playerbots bot self  \r\n\r\n/p nc +master fishing \t\r\n",
+         AutoFishKeepAliveCommands = "\n/p nc +master fishing   ",
+         AutoFishStopCommands = "/p nc -master fishing\t\n\n .playerbots bot self\n\n",
+         AutoFishLureCommands = "/p u %l  \n",
+      }, Outfit = {}, WasWearing = {} } }
+      local env = boot{ bom = "strip", saved = saved }
+      r.env = env
+      local S = env.G.FishingBuddy_Player.Settings
+      r:check(S.AutoFishStartCommands == nil and S.AutoFishKeepAliveCommands == nil
+              and S.AutoFishStopCommands == nil and S.AutoFishLureCommands == nil, "all four old defaults were cleared")
+   end)
+
+-- [Y12-Y19] the /fb auto sub-commands
+scenario("auto-slash-commands",
+   "/fb auto panel | lure | probe | status | diag do what they say",
+   function(r)
+      local env = boot{ bom = "strip", server = { active = true } }
+      r.env = env
+      local srv = env.server
+      local FB = env.G.FishingBuddy
+      r:check(FB.GetSettingBool("AutoFishPanelVisible") and env.G.FishingAutoPanel:IsVisible() == 1, "precondition: panel visible")
+      env:slash("/fb auto panel")
+      r:check(not FB.GetSettingBool("AutoFishPanelVisible") and env.G.FishingAutoPanel:IsVisible() ~= 1, "'panel' hides the panel")
+      env:slash("/fb auto panel")
+      r:check(FB.GetSettingBool("AutoFishPanelVisible") and env.G.FishingAutoPanel:IsVisible() == 1, "'panel' shows it again")
+      env.chat = {}
+      env:slash("/fb auto lure")
+      r:check(not FB.GetSettingBool("AutoFishAutoLure") and chat_has(env, "Let the bot apply lures off"), "'lure' switches the option off and says so")
+      env:slash("/fb auto lure")
+      r:check(FB.GetSettingBool("AutoFishAutoLure") and chat_has(env, "Let the bot apply lures on"), "'lure' switches it on again and says so")
+      env.chat = {}
+      env:slash("/fb auto status")
+      r:check(chat_has(env, "Auto Fishing: OFF"), "'status' while stopped says OFF")
+      env:clear_sent()
+      env:slash("/fb auto probe")
+      env:advance(20, 0.1)
+      r:check(count_sent(env, "nc ?") == 1, "'probe' asks the bot once")
+      env.chat = {}
+      env:slash("/fb auto diag")
+      local age
+      for _, l in ipairs(env.chat) do age = age or strip_colors(l):match("Bot strategies %((%d+) s ago%)") end
+      r:check(age and tonumber(age) >= 18 and tonumber(age) <= 21, "'diag' shows how old the bot's last list is (about 20 s)", tostring(age))
+      no_errors(r, env)
+   end)
+
+-- [Y02-Y08, Y14, Y15] the lure logic: thresholds, give-up, reset, alert fallback
+scenario("auto-lure-cycle",
+   "lure handling: asked within 30 s of expiry (not before), three tries then give up, a fresh lure or '/fb auto lure' resets the give-up, "
+   .. "with the option off a warning appears at the right moments",
+   function(r)
+      local function lure_env(seconds, setup)
+         local env = boot{ bom = "strip", world = { bags_have_lure = true, lure_seconds = seconds } }
+         if setup then setup(env) end
+         return env
+      end
+      local env = lure_env(25)
+      start(env, 40)
+      r:check(PX.count_lure_lines(env) >= 1, "25 s left: the bot is asked to apply a lure")
+      local env2 = lure_env(60)
+      start(env2, 40)
+      r:check(PX.count_lure_lines(env2) == 0, "60 s left: not yet")
+      -- give up, fresh lure resets, expires again
+      local env3 = lure_env(0)
+      r.env = env3
+      start(env3, 100)
+      r:check(PX.count_lure_lines(env3) == 3, "three tries, then given up", PX.count_lure_lines(env3) .. " lines")
+      r:check(chat_has(env3, "did not apply the lure"), "and the player is told")
+      env3.world.lure_seconds = 600
+      env3:advance(10, 0.5)
+      env3.world.lure_seconds = 0
+      env3:advance(100, 0.5)
+      r:check(PX.count_lure_lines(env3) == 6, "a lure that sat in between resets the give-up: three more tries", PX.count_lure_lines(env3) .. " lines")
+      env3:slash("/fb auto lure"); env3:slash("/fb auto lure")
+      env3:advance(100, 0.5)
+      r:check(PX.count_lure_lines(env3) == 9, "'/fb auto lure' off/on resets the give-up as well: three more tries", PX.count_lure_lines(env3) .. " lines")
+      no_errors(r, env3)
+      -- option off: warnings only, once a minute, with the right text
+      local env4 = lure_env(0, function(e) e.G.FishingBuddy.SetSetting("AutoFishAutoLure", 0) end)
+      start(env4, 130)
+      local gone = PX.chat_count(env4, "Your lure has expired")
+      r:check(PX.count_lure_lines(env4) == 0 and gone >= 1 and gone <= 3, "[option off, lure expired] a warning every ~60 s, no command", gone .. " warnings")
+      local env5 = lure_env(20, function(e) e.G.FishingBuddy.SetSetting("AutoFishAutoLure", 0) end)
+      start(env5, 40)
+      r:check(PX.chat_count(env5, "Lure expires in") >= 1 and PX.chat_count(env5, "Your lure has expired") == 0, "[option off, 20 s left] the 'expires in N seconds' text")
+      local env6 = lure_env(0, function(e) e.G.FishingBuddy.SetSetting("AutoFishAutoLure", 0); e.G.FishingBuddy.SetSetting("AutoFishLureAlert", 0) end)
+      start(env6, 130)
+      r:check(PX.chat_count(env6, "lure") == 0 or (PX.chat_count(env6, "lure") == PX.chat_count(env6, "Let the bot apply lures")), "[both options off] no lure warning", PX.chat_count(env6, "Your lure has expired") .. " warnings")
+   end)
+
+-- [Y29-Y31] the chat types a block line can use and the placeholders
+scenario("auto-chat-types",
+   "'/s /y /p /g /o /ra /rw /bg' map to their chat types; %z and %s are the zone and the sub zone",
+   function(r)
+      local cases = {
+         { "/s say it", "SAY", "say it" }, { "/y yell it", "YELL", "yell it" }, { "/p party it", "PARTY", "party it" },
+         { "/g guild it", "GUILD", "guild it" }, { "/o officer it", "OFFICER", "officer it" }, { "/ra raid it", "RAID", "raid it" },
+         { "/rw warn it", "RAID_WARNING", "warn it" }, { "/bg bg it", "BATTLEGROUND", "bg it" },
+      }
+      local lines = { "/w %p nc +master fishing" }
+      for _, c in ipairs(cases) do lines[#lines + 1] = c[1] end
+      lines[#lines + 1] = "/s here: %z | %s | %q"
+      local saved = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishStartCommands = table.concat(lines, "\n") }, Outfit = {}, WasWearing = {} } }
+      local env = boot{ bom = "strip", saved = saved, world = { party = 2 } }
+      r.env = env
+      start(env)
+      local seen = {}
+      for _, e in ipairs(env.sent) do seen[e.text] = e.chattype end
+      for _, c in ipairs(cases) do
+         r:check(seen[c[3]] == c[2], c[1] .. " -> " .. c[2], tostring(seen[c[3]]))
+      end
+      r:check(seen["here: Stranglethorn Vale | Booty Bay | %q"] == "SAY", "%z = zone, %s = sub zone, an unknown placeholder stays", table.concat(sent_texts(env), " | "))
+      no_errors(r, env)
+   end)
+
+-- [Y01, Y11] the numbers the player reads: run time in the summary, catch rate on the panel
+scenario("auto-summary-and-panel",
+   "the summary shows h:mm:ss for long runs; the panel shows 'starting' then 'ON', the catch rate only after 30 s, and OFF after the stop",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      env:advance(2, 0.1)
+      r:check(PX.panel_texts(env):find("Auto Fishing: starting", 1, true) ~= nil, "panel: starting while the start is being confirmed", PX.panel_texts(env))
+      r:check(PX.until_step(env, "run"), "confirmed")
+      env:advance(1, 0.5)
+      r:check(PX.panel_texts(env):find("Auto Fishing: ON", 1, true) ~= nil, "panel: ON", PX.panel_texts(env))
+      env.world.loot = { 13754 }; env.world.loot_is_fishing = true
+      env:fire("LOOT_OPENED")
+      env:advance(5, 0.5)
+      r:check(PX.panel_texts(env):find("1 Fish  |  0/h", 1, true) ~= nil, "panel: one catch, rate still 0/h during the first 30 s", PX.panel_texts(env))
+      env:advance(60, 0.5)
+      local rate = PX.panel_texts(env):match("1 Fish  |  (%d+)/h")
+      r:check(rate and tonumber(rate) > 30 and tonumber(rate) < 80, "panel: after ~85 s the rate is about 40/h", tostring(rate))
+      env:call("Auto.Stop", Auto(env).Stop)
+      env:advance(35, 0.5)
+      r:check(PX.panel_texts(env):find("Auto Fishing: OFF", 1, true) ~= nil, "panel: OFF after the stop", PX.panel_texts(env))
+      -- long run: h:mm:ss
+      local env2 = boot{ bom = "strip" }
+      env2:call("Auto.Toggle", Auto(env2).Toggle)
+      env2:advance(3725, 0.5)
+      r:check(Auto(env2).IsRunning(), "precondition: still running after 3725 s")
+      env2:call("Auto.Stop", Auto(env2).Stop)
+      r:check(chat_has(env2, "Ran for 1:02:05"), "summary: 3725 s = 1:02:05")
+   end)
+
+-- [Z19] Stop / "/fb auto off" while nothing runs
+scenario("auto-stop-when-off",
+   "'/fb auto off' while auto fishing is off does nothing: no 'stopped' message, no summary, nothing sent, other addons' STOP handlers are not called",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local stops = 0
+      env.G.FishingBuddy.API.RegisterHandlers({ [env.G.FBConstants.AUTO_STOP_EVT] = function() stops = stops + 1 end })
+      env:clear_sent()
+      env.chat = {}
+      env:slash("/fb auto off")
+      env:call("Auto.Stop", Auto(env).Stop)
+      env:advance(2, 0.1)
+      r:check(not chat_has(env, "Auto fishing stopped") and not chat_has(env, "Ran for"), "no 'stopped' message and no summary")
+      r:check(#env.sent == 0, "nothing was sent")
+      r:check(stops == 0, "no STOP event for other addons", "stop events: " .. stops)
+      r:check(#(env.sounds or {}) == 0, "no alert sound")
+   end)
+
+-- [Z15] the cleanup after login keeps waiting for the bot (a sleeping bot answers late)
+scenario("auto-resume-slow-bot",
+   "pending cleanup, the bot answers the probe but reads the removal only 5 s later: the cleanup waits for it and then switches the bot off",
+   function(r)
+      local saved = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishPending = { ownsBot = true, restore = true } }, Outfit = {}, WasWearing = {} } }
+      local env = boot{ bom = "strip", saved = saved,
+         server = { active = true, persisted = { "nc", "chat", "follow", "default", "master fishing" } } }
+      r.env = env
+      local srv = env.server
+      local guard = 0
+      while count_sent_matching(env, "-master fishing") == 0 and guard < 3000 do env:advance(0.01, 0.01); guard = guard + 1 end
+      srv.ready_at = env.now + 5                             -- the bot falls asleep just after answering the probe
+      env:advance(40, 0.1)
+      r:check(not srv.active, "the bot we had switched on is off after all")
+      r:check(srv.persisted and not srv.persisted["master fishing"] and srv.persisted["mount"], "and its stored set is clean")
+      no_errors(r, env)
+   end)
+
+-- [P04, P05, P09, P11] a Hold that raises: Botpad does not hold, so the addon must wait out the burst -- and report the errors
+scenario("auto-botpad-hold-errors-strict",
+   "Hold and Release raise: the addon waits for the Botpad burst like with an old Botpad (our nc is not overwritten), and the errors are reported",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local BP = Server.install_botpad_stub(env, true)
+      local holds = 0
+      BP.Bot.Hold = function() holds = holds + 1; error("boom in Hold") end
+      BP.Bot.Release = function() error("boom in Release") end
+      start(env, 60)
+      r:check(BP.Bot.bursts == 1, "Botpad burst once (it was not held)", "bursts: " .. BP.Bot.bursts)
+      r:check(count_sent(env, "nc ?,-mount,+master fishing,?") == 1, "no retry was needed: the command went out after the burst")
+      local ours = 0
+      for _, c in ipairs(env.server.collapsed) do if c.text:find("master fishing", 1, true) then ours = ours + 1 end end
+      r:check(ours == 0, "none of OUR nc commands was overwritten (Botpad's own burst may collapse itself)", ours .. " lost")
+      local n_before = #env.errors
+      r:check(n_before >= 1, "the Hold error was reported", n_before .. " errors")
+      stop(env)
+      r:check(#env.errors > n_before, "the Release error was reported")
+      r:check(not env.server.active, "stopped cleanly")
+      start(env, 5)
+      r:check(holds == 2, "the second run asks Botpad to hold again (the failed Release did not leave the addon believing it still holds)", "Hold calls: " .. holds)
+   end)
+
+
+-- proposed_defect_scenarios.lua  (mutation-testing lens)
+-- ---------------------------------------------------------------------------
+-- Three scenarios that FAIL on the current FishingAuto.lua (HEAD 09f49cc).  They came out of the analysis of
+-- surviving mutants: the survivor was not "equivalent", the mutant (or a small fix) behaves better than the code.
+-- Paste next to proposed_scenarios.lua (same helpers); until the code is fixed list the three names in
+-- tests/expected_failures.txt.  The suggested one-line fixes are in the comments and were checked in a scratch copy.
+-- ---------------------------------------------------------------------------
+
+-- Fix: in SessionEvent, branch kind == "refused", set  s.toggleSent = false;  before Fail(...)  (the toggle WAS answered),
+-- so BeginShutdown does not wait TOGGLE_WAIT (5 s) for an answer that has already come.
+scenario("auto-refusal-restart",
+   "after the server refused the self bot the addon is idle at once: no 5 s 'stopping' phase that blocks the next Start",
+   function(r)
+      local env = boot{ bom = "strip", server = { selfbot_level = 0 } }
+      r.env = env
+      start(env, 5)                                          -- the refusal arrived at ~3.1 s
+      r:check(not Auto(env).IsRunning(), "not running")
+      r:check(not Auto(env).GetState().stopping and Auto(env).GetState().step == "idle", "idle right after the refusal", Auto(env).GetState().step)
+      env.server.level = 2                                   -- the player fixes the server setting
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      r:check(Auto(env).IsRunning(), "the next Start is accepted at once")
+      r:check(not chat_has(env, "still being stopped"), "no 'still being stopped' message")
+   end)
+
+-- Fix: in Auto.AbortShutdown use  if ( st.ownsBot or st.restore ) and st.step ~= "awaiton" then SavePending(st.ownsBot, st.restore) end
+-- (any step that still owes the bot a cleanup, not only "remove").
+scenario("auto-double-reload-pending",
+   "a second /reload within the ~0.2-18 s the cleanup probe is outstanding must not forget the cleanup",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      start(env)
+      env:fire("PLAYER_LOGOUT")
+      env:advance(3, 0.1)
+      -- session 2: the first removal was lost, the bot still has the strategy
+      local env2 = boot{ bom = "strip", saved = saved_of(env),
+         server = { active = true, persisted = { "nc", "chat", "follow", "default", "master fishing" } } }
+      r.env = env2
+      local g = 0
+      while not Auto(env2).GetState().stopping and g < 2000 do env2:advance(0.01, 0.01); g = g + 1 end
+      env2:advance(0.03, 0.01)                               -- the cleanup probe is out, its answer is not in yet
+      r:check(Auto(env2).GetState().stopping and Auto(env2).GetState().step == "stopping", "precondition: cleanup probe outstanding")
+      env2:fire("PLAYER_LOGOUT")                             -- the player reloads again
+      local pend = env2.G.FishingBuddy_Player.Settings.AutoFishPending
+      r:check(type(pend) == "table" and pend.ownsBot == true, "the cleanup is saved for the next session again")
+   end)
+
+-- Fix: in SessionTick, probe branch, after  s.sawOn  re-probe wait at least as long as the deaf window of a fresh bot:
+--     s.due = now + 12;     instead of     s.due = now + ProbeWait();
+scenario("auto-foreign-on-during-probe",
+   "somebody else (Botpad, AutoTravel) switches the bot on while the probe is outstanding: the addon asks again and does NOT toggle (no off/on pair)",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local srv = env.server
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      env:advance(0.5, 0.1)
+      srv:toggle()                                           -- a foreign "SelfBot is now active."
+      env:advance(60, 0.1)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing"), "running with the strategy")
+      r:check(srv.toggles == 1, "the addon did not toggle the bot that somebody else had just switched on", "toggles: " .. srv.toggles)
+      r:check(not Auto(env).GetState().ownsBot, "and does not claim it")
+   end)
+
+
+
+-- ---------------------------------------------------------------------------
+-- scenarios for the defects the independent review confirmed (each one fails on the code before the fixes)
+-- ---------------------------------------------------------------------------
+
+-- Stop between the corrective second toggle and its answer: the bot was on before Start, so it stays on.
+scenario("auto-stop-during-retoggle",
+   "Stop between the corrective second toggle and its answer: the bot was on before Start and stays on (no third toggle)",
+   function(r)
+      local env = boot{ bom = "strip", server = { selfbot_level = 3, login_auto = true } }
+      r.env = env
+      local srv = env.server
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      local g = 0
+      while srv.toggles < 2 and g < 3000 do env:advance(0.01, 0.01); g = g + 1 end
+      r:check(srv.toggles == 2, "precondition: the corrective toggle is out", "toggles: " .. srv.toggles)
+      env:call("Auto.Stop", Auto(env).Stop)
+      env:advance(30, 0.1)
+      r:check(srv.active, "the bot is on again, as it was before Start", "toggles: " .. srv.toggles)
+      r:check(srv.toggles == 2, "no third toggle", "toggles: " .. srv.toggles)
+      no_errors(r, env)
+   end)
+
+-- A reply to the apply command that arrives after Stop must not count as the confirmation of the removal.
+scenario("auto-stop-sweep",
+   "Stop at any moment of a cold start leaves the bot clean ('master fishing' gone, 'mount' back, bot off), for a fast and a slow link",
+   function(r)
+      local bad = {}
+      for _, latency in ipairs{ 0.08, 0.5 } do
+         for k = 0, 44 do
+            local t = k * 0.7
+            local env = boot{ bom = "strip", server = { latency = latency } }
+            r.env = env
+            local srv = env.server
+            env:call("Auto.Toggle", Auto(env).Toggle)
+            env:advance(t, 0.05)
+            env:call("Auto.Stop", Auto(env).Stop)
+            env:advance(60, 0.1)
+            local clean = (not srv.active) and srv.persisted ~= nil and not srv.persisted["master fishing"] and srv.persisted["mount"]
+            if srv.persisted == nil then clean = not srv.active end       -- never activated: nothing stored
+            if not clean then bad[#bad + 1] = ("lat %.2f stop@%.1f active=%s master=%s mount=%s"):format(
+               latency, t, tostring(srv.active), tostring(srv.persisted and srv.persisted["master fishing"]), tostring(srv.persisted and srv.persisted["mount"])) end
+            if #env.errors > 0 then bad[#bad + 1] = "Lua error at " .. t .. ": " .. env.errors[1].message end
+         end
+      end
+      r:check(#bad == 0, "every Stop time ends clean", table.concat(bad, " | "))
+   end)
+
+-- Several stop times with the link slow enough that the first list of the apply command arrives after Stop.
+scenario("auto-stop-stale-list",
+   "a list that answers the start command and arrives after Stop is not taken as the confirmation of the removal",
+   function(r)
+      local env = boot{ bom = "strip", server = { latency = 0.5 } }
+      r.env = env
+      local srv = env.server
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      -- run until the apply command has been drained by the (awake) bot, its two answers are still on the way
+      local g = 0
+      while #srv.executed == 0 and g < 6000 do env:advance(0.01, 0.01); g = g + 1 end
+      r:check(#srv.executed == 1, "precondition: the apply command was executed", "executed: " .. #srv.executed)
+      env:advance(0.1, 0.01)
+      env:call("Auto.Stop", Auto(env).Stop)
+      env:advance(60, 0.1)
+      r:check(not srv.active and not srv.persisted["master fishing"] and srv.persisted["mount"],
+              "the bot is clean and off", table.concat(srv:strategies(), ", "))
+      no_collapse(r, env)
+   end)
+
+-- A refused start must not leave the addon in a 5 s 'stopping' phase (covered by auto-refusal-restart too).
+
+-- Logout while the bot sleeps on the bobber: the removal cannot reach it. The next session must still know that 'mount'
+-- was taken away, and take 'master fishing' back as soon as the bot is on and listening.
+scenario("auto-logout-asleep",
+   "a real logout while the bot sleeps: the note stays, the next run puts 'mount' back, and the leftover strategy is gone afterwards",
+   function(r)
+      local env = boot{ bom = "strip", server = { busy = { cycle = 20, sleep = 15 } } }
+      r.env = env
+      start(env, 45)
+      local srv = env.server
+      env:fire("PLAYER_LOGOUT")
+      srv:deactivate()                                  -- the player left: the AI (and its queue) is gone
+      local left = {}
+      for n in pairs(srv.persisted) do left[n] = true end
+      r:check(left["master fishing"] and not left["mount"], "precondition: the server kept 'master fishing' and lost 'mount'")
+      -- next login, the bot is off: the note stays
+      local list = {}
+      for n in pairs(left) do list[#list + 1] = n end
+      local env2 = boot{ bom = "strip", saved = saved_of(env), server = { persisted = list } }
+      r.env = env2
+      env2:advance(30, 0.1)
+      local note = env2.G.FishingBuddy_Player.Settings.AutoFishPending
+      r:check(type(note) == "table" and note.restore == true and note.tries == 1, "the note survived an unanswered cleanup")
+      -- a normal run: the leftover list has no 'mount', but the note says it was taken away
+      start(env2, 45)
+      local srv2 = env2.server
+      r:check(srv2:has("master fishing") and not srv2:has("mount"), "running")
+      r:check(env2.G.FishingBuddy_Player.Settings.AutoFishPending == nil, "the run took the note over")
+      stop(env2, 40)
+      r:check(not srv2.active and srv2.persisted["mount"] and not srv2.persisted["master fishing"],
+              "after Stop: 'mount' is back, 'master fishing' gone, bot off")
+      no_errors(r, env2)
+   end)
+
+-- SelfBotLevel > 2: the bot is switched on silently at login and deaf for ~10 s; the cleanup probe waits long enough.
+scenario("auto-resume-deaf-bot",
+   "cleanup after a /reload when the bot was switched on silently at login (deaf for ~10 s): the probe waits for it and cleans up",
+   function(r)
+      local saved = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishPending = { ownsBot = false, restore = true } }, Outfit = {}, WasWearing = {} } }
+      local env = boot{ bom = "strip", saved = saved,
+         server = { selfbot_level = 3, login_auto = true, persisted = { "nc", "chat", "follow", "default", "master fishing" } } }
+      r.env = env
+      env:advance(40, 0.1)
+      local srv = env.server
+      r:check(not srv:has("master fishing") and srv:has("mount"), "leftover 'master fishing' removed, 'mount' back", table.concat(srv:strategies(), ", "))
+      r:check(srv.active and srv.toggles == 0, "the bot (not ours) was not touched otherwise")
+      r:check(env.G.FishingBuddy_Player.Settings.AutoFishPending == nil, "the note is gone")
+      no_errors(r, env)
+   end)
+
+-- Start while the post-login cleanup is still waiting for the bot: no 'still being stopped', the run takes the note over.
+scenario("auto-start-during-resume",
+   "Start while the post-login cleanup probe is outstanding (bot off): the run starts, takes the note over and restores 'mount' at the end",
+   function(r)
+      local saved = { FishingBuddy_Info = {}, FishingBuddy_Player = { Settings = { AutoFishPending = { ownsBot = false, restore = true } }, Outfit = {}, WasWearing = {} } }
+      local env = boot{ bom = "strip", saved = saved, server = { persisted = { "nc", "chat", "follow", "default", "master fishing" } } }
+      r.env = env
+      env:advance(7, 0.1)
+      r:check(Auto(env).GetState().stopping, "precondition: the cleanup probe is outstanding")
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      r:check(Auto(env).IsRunning(), "Start is accepted")
+      r:check(not chat_has(env, "still being stopped"), "no 'still being stopped'")
+      env:advance(45, 0.1)
+      local srv = env.server
+      r:check(srv:has("master fishing") and not srv:has("mount"), "running")
+      stop(env, 40)
+      r:check(not srv.active and srv.persisted["mount"] and not srv.persisted["master fishing"], "clean afterwards")
+      no_errors(r, env)
+   end)
+
+-- Somebody else switches the bot off while the strategy is set: the strategy may stay stored. The note makes the next
+-- activation (by anybody) clean it up as soon as the bot listens.
+scenario("auto-foreign-off-leftover",
+   "somebody switches the bot off during the run: a note is saved; when the bot is switched on again the leftover strategy is removed",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      local srv = env.server
+      start(env, 45)
+      srv:toggle()                                       -- foreign switch-off ("deactivated")
+      env:advance(5, 0.1)
+      r:check(not Auto(env).IsRunning(), "the run ended")
+      local note = env.G.FishingBuddy_Player.Settings.AutoFishPending
+      r:check(type(note) == "table", "a note was saved")
+      r:check(srv.persisted and srv.persisted["master fishing"], "precondition: the strategy is still stored on the server")
+      srv:toggle()                                       -- somebody (Botpad, AutoTravel, the player) switches the bot on again
+      env:advance(40, 0.1)
+      r:check(srv.active and not srv:has("master fishing"), "the leftover strategy was removed, the bot (not ours) stays on")
+      r:check(srv:has("mount"), "and 'mount' is back")
+      r:check(env.G.FishingBuddy_Player.Settings.AutoFishPending == nil, "note cleared")
+      no_errors(r, env)
+   end)
+
+-- The bot's answers to the stop command are hidden too, also after a long quiet run.
+scenario("auto-echo-stop",
+   "the bot's answer to the stop command (long after the last probe) does not show up in the chat window",
+   function(r)
+      local env = boot{ bom = "strip" }
+      r.env = env
+      start(env, 90)
+      env:advance(60, 0.5)
+      env.chat_display = env.chat_display or {}
+      local before = #env.chat_display
+      stop(env, 40)
+      local leaked = {}
+      for i = before + 1, #env.chat_display do
+         local l = env.chat_display[i]
+         if tostring(l):lower():find("strategies:", 1, true) then leaked[#leaked + 1] = l end
+      end
+      r:check(#leaked == 0, "no 'Strategies:' line in the chat window after Stop", table.concat(leaked, " | "))
+   end)
+
+-- The first automatic lure attempt must not be wasted on a bot that is not active yet.
+scenario("auto-lure-during-start",
+   "an expired lure at Start: the bot lure command is not sent before the start is confirmed",
+   function(r)
+      local env = boot{ bom = "strip", world = { bags_have_lure = true, lure_seconds = 0 } }
+      r.env = env
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      env:advance(12, 0.1)                               -- probe, toggle, settle, apply: not confirmed yet
+      local early = 0
+      for _, e in ipairs(env.sent) do if e.text:find("^u ") then early = early + 1 end end
+      r:check(early == 0, "no lure line before the start is confirmed", "sent: " .. early)
+      env:advance(60, 0.1)
+      local lines = 0
+      for _, e in ipairs(env.sent) do if e.text:find("^u ") then lines = lines + 1 end end
+      r:check(lines >= 1, "but later it is tried", "sent: " .. lines)
+   end)
+
+-- Non-nc lines of a custom block run once; only the merged nc command is repeated.
+scenario("auto-stop-others-once",
+   "a custom stop block with a /s line: the line is spoken once although the removal is repeated while the bot sleeps",
+   function(r)
+      local env = boot{ bom = "strip", world = { channeling = true },
+         server = { active = true, persisted = { "nc", "chat", "follow", "default", "master fishing", "mount" },
+                    busy = { cycle = 40, sleep = 17 } } }
+      r.env = env
+      env.server.fish_since = env.now                        -- it just cast: asleep for the next 17 s
+      env.G.FishingBuddy_Player.Settings.AutoFishStopCommands = "/w %p nc -master fishing\n/s fishing is over"
+      start(env, 40)                                          -- the next sleep starts exactly now
+      env:clear_sent()
+      env:call("Auto.Stop", Auto(env).Stop)
+      env:advance(40, 0.1)
+      local said, nc = 0, 0
+      for _, e in ipairs(env.sent) do
+         if e.text == "fishing is over" then said = said + 1 end
+         if e.text:find("^nc ") then nc = nc + 1 end
+      end
+      r:check(nc >= 2, "precondition: the removal was repeated", "nc sends: " .. nc)
+      r:check(said == 1, "the /s line went out once", "said: " .. said)
+   end)
+
+-- The bot already has the wanted strategies: the reply to the apply command is suppressed by the server (same text).
+scenario("auto-already-fishing",
+   "the bot already fishes ('master fishing' set, no 'mount'): the start is confirmed without a failed retry",
+   function(r)
+      local env = boot{ bom = "strip",
+         server = { active = true, persisted = { "nc", "chat", "follow", "default", "master fishing" } } }
+      r.env = env
+      env:advance(15, 0.5)
+      start(env, 40)
+      r:check(Auto(env).IsRunning() and Auto(env).GetState().step == "run", "running", Auto(env).GetState().step)
+      r:check(env.server.toggles == 0, "no toggle")
+      local applies = count_sent(env, "nc +master fishing,?") + count_sent(env, "nc -mount,+master fishing,?")
+      r:check(applies == 1, "the strategy was applied once, no retry", "applies: " .. applies)
+      r:check(chat_has(env, "Auto fishing started"), "started message")
+      no_errors(r, env)
+   end)
+
+-- Stop and Start in quick succession on a bot that is not ours: the probe reply equals the stop reply (suppressed by the server).
+scenario("auto-restart-quick",
+   "Stop, then Start again within a second on a bot that was on before: the suppressed duplicate reply does not make the addon toggle the bot",
+   function(r)
+      local env = boot{ bom = "strip", server = { active = true } }
+      r.env = env
+      env:advance(15, 0.5)
+      start(env, 40)
+      local srv = env.server
+      env:call("Auto.Stop", Auto(env).Stop)
+      local g = 0
+      while Auto(env).GetState().stopping and g < 3000 do env:advance(0.05, 0.05); g = g + 1 end
+      env:advance(0.3, 0.05)
+      env:call("Auto.Toggle", Auto(env).Toggle)
+      env:advance(45, 0.1)
+      r:check(srv.toggles == 0, "the bot was never toggled", "toggles: " .. srv.toggles)
+      r:check(Auto(env).IsRunning() and srv:has("master fishing"), "and fishes again")
+      no_errors(r, env)
+   end)
+
+-- Somebody else switches the bot on while the probe is outstanding: re-ask after the deaf window (one toggle fewer).
+-- (auto-foreign-on-during-probe above)
+
+-- Hand-written block that resets with "nc !" before setting: the server applies '!' last; the warning/hint is in the docs.
 
 -- ---------------------------------------------------------------------------
 -- run

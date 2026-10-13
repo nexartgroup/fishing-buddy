@@ -295,7 +295,7 @@ FishingTranslations["enUS"].AUTO_TIP_STOP = "Left click: stop auto fishing";
 FishingTranslations["enUS"].AUTO_TIP_RIGHT = "Right click: open options";
 FishingTranslations["enUS"].AUTO_TIP_DRAG = "Drag the panel to move it.";
 FishingTranslations["enUS"].AUTO_EDITOR_TITLE = "Playerbot commands";
-FishingTranslations["enUS"].AUTO_EDITOR_HINT = "One command per line. '/w %p text' whispers your own self bot (use this). '/p' only reaches it inside a group (outside a group it is sent to your own bot instead); lines starting with a dot are server commands. Several 'nc' lines are merged into ONE command (the bot keeps only the last 'nc' per tick). The self-bot toggle is handled by the addon. %p = your name, %z = zone, %s = subzone.";
+FishingTranslations["enUS"].AUTO_EDITOR_HINT = "One command per line. '/w %p ...' reaches your own self bot; several 'nc' lines are merged into one command. A leading dot sends a server command. The self-bot toggle is handled by the addon. %p = name, %z = zone, %s = subzone. Details: README.";
 FishingTranslations["enUS"].AUTO_EDITOR_START = "On start:";
 FishingTranslations["enUS"].AUTO_EDITOR_KEEP = "Re-set (used when the check finds the strategy gone):";
 FishingTranslations["enUS"].AUTO_EDITOR_STOP = "On stop:";
@@ -320,7 +320,7 @@ FishingTranslations["enUS"].CONFIG_AUTOLURE_INFO = "Print a warning when your lu
 FishingTranslations["enUS"].CONFIG_AUTOSOUND_ONOFF = "Play a sound on alerts";
 FishingTranslations["enUS"].CONFIG_AUTOSOUND_INFO = "Play a sound when auto fishing starts, stops or warns you.";
 FishingTranslations["enUS"].CONFIG_AUTOVERBOSE_ONOFF = "Verbose messages";
-FishingTranslations["enUS"].CONFIG_AUTOVERBOSE_INFO = "Also report keep-alive commands in the chat frame.";
+FishingTranslations["enUS"].CONFIG_AUTOVERBOSE_INFO = "Also report when the bot lost its strategy and when the bot is asked to apply a lure.";
 FishingTranslations["enUS"].CONFIG_AUTOIDLE_INFO = "How long to wait without a catch before checking the bot.";
 FishingTranslations["enUS"].CONFIG_AUTOMAX_INFO = "Stop automatically after this many minutes (0 = no limit).";
 FishingTranslations["enUS"].CONFIG_AUTOEDITOR_INFO = "Open the editor for the playerbot commands.";

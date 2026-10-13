@@ -226,7 +226,7 @@ FishingTranslations["deDE"].AUTO_TIP_STOP = "Linksklick: Auto-Angeln stoppen";
 FishingTranslations["deDE"].AUTO_TIP_RIGHT = "Rechtsklick: Einstellungen \195\182ffnen";
 FishingTranslations["deDE"].AUTO_TIP_DRAG = "Panel mit der Maus verschieben.";
 FishingTranslations["deDE"].AUTO_EDITOR_TITLE = "Playerbot-Befehle";
-FishingTranslations["deDE"].AUTO_EDITOR_HINT = "Ein Befehl pro Zeile. '/w %p text' fl\195\188stert deinem eigenen Selbstbot (so verwenden). '/p' erreicht ihn nur in einer Gruppe (ohne Gruppe geht die Zeile stattdessen an deinen eigenen Bot); Zeilen mit f\195\188hrendem Punkt gehen als Server-Befehl raus. Mehrere 'nc'-Zeilen werden zu EINEM Befehl zusammengefasst (der Bot beh\195\164lt je Takt nur das letzte 'nc'). Den Umschalter des Selbstbots erledigt das AddOn. %p = eigener Name, %z = Zone, %s = Unterzone.";
+FishingTranslations["deDE"].AUTO_EDITOR_HINT = "Ein Befehl pro Zeile. '/w %p ...' erreicht deinen eigenen Selbstbot; mehrere 'nc'-Zeilen werden zu einem Befehl zusammengefasst. Ein Punkt am Anfang sendet einen Server-Befehl. Den Umschalter des Selbstbots erledigt das AddOn. %p = Name, %z = Zone, %s = Unterzone. Einzelheiten: README.";
 FishingTranslations["deDE"].AUTO_EDITOR_START = "Beim Start:";
 FishingTranslations["deDE"].AUTO_EDITOR_KEEP = "Neu setzen (wenn die Pr\195\188fung die Strategie vermisst):";
 FishingTranslations["deDE"].AUTO_EDITOR_STOP = "Beim Stoppen:";
@@ -251,7 +251,7 @@ FishingTranslations["deDE"].CONFIG_AUTOLURE_INFO = "Gibt eine Warnung aus, kurz 
 FishingTranslations["deDE"].CONFIG_AUTOSOUND_ONOFF = "Signalton bei Meldungen";
 FishingTranslations["deDE"].CONFIG_AUTOSOUND_INFO = "Spielt einen Ton beim Starten, Stoppen und bei Warnungen.";
 FishingTranslations["deDE"].CONFIG_AUTOVERBOSE_ONOFF = "Ausf\195\188hrliche Meldungen";
-FishingTranslations["deDE"].CONFIG_AUTOVERBOSE_INFO = "Meldet auch die Nachfass-Befehle im Chatfenster.";
+FishingTranslations["deDE"].CONFIG_AUTOVERBOSE_INFO = "Meldet auch, wenn der Bot seine Strategie verloren hat und wenn er einen K\195\182der auftragen soll.";
 FishingTranslations["deDE"].CONFIG_AUTOIDLE_INFO = "Wie lange ohne Fang gewartet wird, bevor der Bot gepr\195\188ft wird.";
 FishingTranslations["deDE"].CONFIG_AUTOMAX_INFO = "Automatisch nach so vielen Minuten stoppen (0 = kein Limit).";
 FishingTranslations["deDE"].CONFIG_AUTOEDITOR_INFO = "\195\150ffnet den Editor f\195\188r die Playerbot-Befehle.";

@@ -70,14 +70,19 @@ Beim Start passiert, in dieser Reihenfolge:
                  dann wird ein zweites Mal geschaltet, und der Bot gilt nicht
                  als vom AddOn eingeschaltet.
   3. Strategie   EIN Befehl aus dem Start-Block (Standard:
-                 "/w <eigener Name> nc +master fishing") plus "-mount" (s. 2.6)
-                 und den beiden Abfragen. Auf die Antwort wird bis zu 25 s
-                 gewartet (nach dem Einschalten; 20 s bei einem Bot, der schon
-                 lief).
+                 "/w <eigener Name> nc +master fishing") plus "-mount" (s. 2.6).
+                 Kennt das AddOn die Strategieliste des Bots noch nicht (frisch
+                 eingeschalteter Bot), steht davor eine Abfrage "?", danach
+                 immer eine. Auf die Antwort wird bis zu 25 s gewartet (nach
+                 dem Einschalten; 20 s bei einem Bot, der schon lief).
   4. Pruefung    Die Liste nach der Aenderung muss "master fishing" enthalten.
-                 Wenn nicht: bis zu dreimal neu setzen, dann Abbruch mit
-                 Meldung und der Bot wird wieder ausgeschaltet. Erst nach der
-                 Pruefung steht im Chat "Auto-Angeln gestartet.". Zeigt der
+                 Wenn nicht: insgesamt bis zu drei Versuche (die weiteren nur
+                 mit der Abfrage danach), dann Abbruch mit Meldung, und der Bot
+                 wird wieder ausgeschaltet, sofern das AddOn ihn eingeschaltet
+                 hat. Erst nach der Pruefung steht im Chat "Auto-Angeln
+                 gestartet.". Hat der Bot die Strategie schon, der Server
+                 wiederholt aber keine gleichlautende Antwort, gilt sie nach der
+                 Wartezeit als bestaetigt. Zeigt der
                  Client die Antworten des Bots nie an, gilt der Start nach der
                  Wartezeit als "nicht bestaetigt" (mit Warnung) -- das AddOn
                  gibt dann nicht auf, kann aber auch nichts pruefen.
@@ -94,8 +99,18 @@ Selbstbot waehrenddessen ausgeschaltet, wird er nicht wieder eingeschaltet.
 Abmelden und /reload waehrend des Angelns: die Rueckname geht noch hinaus, den
 Bot auszuschalten wird aber nicht im selben Atemzug versucht (der Server
 verwirft dabei die noch wartende Anweisung). Stattdessen merkt sich das AddOn,
-dass etwas aufzuraeumen ist ("AutoFishPending" in den gespeicherten Daten),
-schaut nach dem naechsten Anmelden nach und raeumt dann auf.
+dass etwas aufzuraeumen ist ("AutoFishPending" in den gespeicherten Daten, mit
+der Angabe, ob "mount" zurueckgegeben werden muss). Nach dem naechsten Anmelden
+schaut es nach (bis zu 14 s, ein frisch eingeschalteter Bot hoert erst nach etwa
+10 s zu) und raeumt auf. Antwortet der Bot nicht, weil er aus ist, bleibt der
+Vermerk (bis zu fuenf Anmeldungen lang) und wird abgearbeitet, sobald der Bot
+das naechste Mal eingeschaltet wird oder ein neuer Lauf beginnt; der neue Lauf
+uebernimmt den Vermerk und gibt "mount" am Ende zurueck. Bei einem echten
+Abmelden erreicht die Rueckname den Server unter Umstaenden nicht mehr (der
+Bot wird mit dem Abmelden abgebaut): dann bleibt "master fishing" gespeichert,
+bis das Aufraeumen es entfernt. Dasselbe gilt, wenn jemand den Selbstbot von
+aussen ausschaltet, solange die Strategie gesetzt ist (z. B. "BOT AUS" in
+Botpad): auch dann wird ein Vermerk gespeichert.
 
 2.2 Bedienung
 -------------
@@ -122,7 +137,8 @@ schaut nach dem naechsten Anmelden nach und raeumt dann auf.
   Makro            /run FishingBuddy_ToggleAutoFishing()
 
 Nach "Stopp" laeuft die Rueckname noch einige Sekunden (siehe oben); in dieser
-Zeit meldet ein neuer Start "Der Bot wird noch gestoppt, einen Moment bitte." und tut nichts.
+Zeit meldet ein neuer Start "Der Bot wird noch gestoppt, einen Moment bitte." und tut nichts. (Nur das
+Aufraeumen nach dem Anmelden, das auf einen stummen Bot wartet, wird von einem neuen Start abgeloest.)
 
 2.3 Die Befehle anpassen
 ------------------------
@@ -134,14 +150,14 @@ Blocks, die noch genau dem alten Standard entsprechen, werden beim Laden durch
 den neuen Standard ersetzt.)
 
   Beim Start        nach dem Einschalten gesendet
-  Nachfassen        gesendet, wenn die Kontrolle die Strategie vermisst
+  Neu setzen        gesendet, wenn die Kontrolle die Strategie vermisst
   Beim Stoppen      vor dem Ausschalten gesendet
   Koeder auftragen  wird gesendet, wenn der Koeder ablaeuft
 
 Voreingestellt sind:
 
   Start:       /w %p nc +master fishing
-  Nachfassen:  /w %p nc +master fishing
+  Neu setzen:  /w %p nc +master fishing
   Stopp:       /w %p nc -master fishing
   Koeder:      /w %p u %l
 
@@ -154,11 +170,19 @@ Regeln fuer die Zeilen:
   .befehl       geht als Server-Befehl raus (Punkt am Anfang)
   /w NAME text  Fluestern an jemand anderen
   /p text       Gruppenchat (ebenso /s /y /g /o /ra /rw /bg /1 ...).
-                Ausnahme: "/p nc ..." geht immer an den eigenen Selbstbot.
-                Eine andere /p-Zeile wird ohne Gruppe NICHT gesendet (der
-                Server wuerde sie verwerfen) und das einmal gemeldet.
+                Ausnahmen: "/p nc ..." geht immer an den eigenen Selbstbot,
+                und OHNE Gruppe geht jede /p-Zeile als Fluestern an den
+                eigenen Selbstbot (der Server wuerde Gruppenchat ohne Gruppe
+                verwerfen); das wird einmal gemeldet. Nur in einer Gruppe geht
+                eine andere /p-Zeile an die Gruppe.
   /sonstiges    wird als normaler Slash-Befehl ausgefuehrt
   -- text       Kommentarzeile, wird uebersprungen
+
+Die uebrigen Zeilen (alles ausser "nc") laufen je Phase nur einmal; wiederholt
+wird nur der zusammengefasste nc-Befehl. Ein Wort zu "nc !": der Server wendet
+"!" erst NACH allen anderen Teilen desselben Befehls an. Eine Zeile "nc !"
+gefolgt von "nc +master fishing" im selben Block loescht die Strategie also
+gleich wieder; ein Rueckstellungsbefehl gehoert nicht in diese Bloecke.
 
 Platzhalter:  %p = eigener Charaktername, %z = Zone, %s = Unterzone
 
@@ -270,7 +294,7 @@ Auto-Angeln erkennt das (der Bot antwortet auf "nc ?") und schaltet nicht um.
      geladen: Ordnername (muss "FishingBuddy" sein), Version der TOC, und mit
      /console scriptErrors 1 nach Lua-Fehlern sehen.
   2. /fb auto diag  zeigt, was passiert ist:
-       "self bot off" und eine Verweigerung im Verlauf -> der Server erlaubt den
+       "Selbstbot aus" (englisch "self bot off") und eine Verweigerung im Verlauf -> der Server erlaubt den
          Selbstmodus nicht (AiPlayerbot.SelfBotLevel: 0 = aus, 1 = nur
          Spielleiter, 2 = alle, mehr = zusaetzlich beim Anmelden automatisch).
        Keine Strategieliste -> der Bot antwortet nicht. Spielleiter-Konten haben
@@ -296,9 +320,10 @@ Auto-Angeln erkennt das (der Bot antwortet auf "nc ?") und schaltet nicht um.
     in einem echten Client gegen einen echten Server. Die Wartezeiten stammen
     aus dem Quelltext des Servers; "/fb auto diag" zeigt, wie es sich tatsaechlich
     verhaelt.
-  * Hat jemand den Selbstbot von aussen ausgeschaltet, bevor die Rueckname
-    ankam, kann "master fishing" in den gespeicherten Strategien des Bots
-    stehenbleiben (s. 2.8, Punkt 4).
+  * Hat jemand den Selbstbot von aussen ausgeschaltet oder wurde abgemeldet,
+    bevor die Rueckname ankam, kann "master fishing" in den gespeicherten
+    Strategien des Bots stehenbleiben und "mount" fehlen. Das AddOn merkt es
+    sich und raeumt auf, sobald der Bot wieder zuhoert (s. 2.1, 2.8 Punkt 4).
   * Das Koeder-Auftragen ueber den Bot gelingt waehrend des Angelns oft nicht
     (s. 2.5).
 
