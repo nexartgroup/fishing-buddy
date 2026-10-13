@@ -98,6 +98,7 @@ local BLIZZ_TEMPLATES = {
    OptionsBaseCheckButtonTemplate  = {},
    OptionsSliderTemplate = { { "FontString", "$parentText" }, { "FontString", "$parentLow" }, { "FontString", "$parentHigh" } },
    UIPanelButtonTemplate = { { "Texture", "$parentLeft" }, { "Texture", "$parentMiddle" }, { "Texture", "$parentRight" } },
+   InputBoxTemplate = { { "Texture", "$parentLeft" }, { "Texture", "$parentMiddle" }, { "Texture", "$parentRight" } },
    UIPanelCloseButton = {},
    UIDropDownMenuTemplate = { { "Texture", "$parentLeft" }, { "Texture", "$parentMiddle" }, { "Texture", "$parentRight" },
                               { "FontString", "$parentText" }, { "Button", "$parentButton" } },
@@ -1040,6 +1041,8 @@ function Env:build_env()
    G.UnitAffectingCombat = function() return W.combat and 1 or nil end
    G.InCombatLockdown = function() return W.combat and 1 or nil end
    G.UnitCastingInfo = function() return nil end
+   G.UnitChannelInfo = function() if W.channeling then return "Fishing" end return nil end
+   G.geterrorhandler = G.geterrorhandler or function() return function(err) env:record_error("errorhandler", err, nil) end end
    G.UnitBuff = function() return nil end
    G.IsMounted = function() return W.mounted end
    G.IsFlying = function() return false end

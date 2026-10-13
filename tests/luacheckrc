@@ -22,7 +22,7 @@ read_globals = {
    "ChatFontNormal", "GearManagerDialog", "UIPanelWindows", "UISpecialFrames", "SlashCmdList", "StaticPopupDialogs",
    -- API functions
    "CreateFrame", "GetTime", "GetGameTime", "CalendarGetDate", "GetLocale", "GetBuildInfo", "GetRealmName", "GetAddOnMetadata", "GetAddOnInfo",
-   "GetCVar", "SetCVar", "UnitName", "UnitIsDeadOrGhost", "InCombatLockdown", "UnitBuff", "UnitCastingInfo", "IsMounted", "IsFlying", "GetNumPartyMembers", "GetNumRaidMembers", "ERR_CHAT_PLAYER_NOT_FOUND_S", "ChatFrame_AddMessageEventFilter",
+   "GetCVar", "SetCVar", "UnitName", "UnitIsDeadOrGhost", "InCombatLockdown", "UnitBuff", "UnitCastingInfo", "UnitChannelInfo", "IsMounted", "IsFlying", "GetNumPartyMembers", "GetNumRaidMembers", "ERR_CHAT_PLAYER_NOT_FOUND_S", "ChatFrame_AddMessageEventFilter",
    "IsMouselooking", "MouselookStop", "IsShiftKeyDown", "IsControlKeyDown", "IsAltKeyDown", "GetCursorPosition", "GetScreenWidth",
    "GetPlayerFacing", "GetPlayerMapPosition", "GetMoney", "GetRealZoneText", "GetSubZoneText", "GetPVPDesired", "SetPVP",
    "GetMapContinents", "GetContainerNumSlots", "SendChatMessage", "PlaySound", "MouseIsOver",

@@ -276,7 +276,7 @@ FishingTranslations["enUS"].AUTO_STARTED = "Auto fishing started.";
 FishingTranslations["enUS"].AUTO_STOPPED = "Auto fishing stopped.";
 FishingTranslations["enUS"].AUTO_SUMMARY = "Ran for %s, caught %d.";
 FishingTranslations["enUS"].AUTO_NEEDPOLE = "Equip a fishing pole first.";
-FishingTranslations["enUS"].AUTO_KEEPALIVE = "No catch for a while, re-sending bot commands.";
+FishingTranslations["enUS"].AUTO_KEEPALIVE = "No catch for a while and the bot lost the strategy -- setting it again.";
 FishingTranslations["enUS"].AUTO_BAGSLOW = "Only %d free bag slots left!";
 FishingTranslations["enUS"].AUTO_LUREGONE = "Your lure has expired -- %s is ready in your bags.";
 FishingTranslations["enUS"].AUTO_LURESOON = "Lure expires in %d seconds -- %s is ready in your bags.";
@@ -295,9 +295,9 @@ FishingTranslations["enUS"].AUTO_TIP_STOP = "Left click: stop auto fishing";
 FishingTranslations["enUS"].AUTO_TIP_RIGHT = "Right click: open options";
 FishingTranslations["enUS"].AUTO_TIP_DRAG = "Drag the panel to move it.";
 FishingTranslations["enUS"].AUTO_EDITOR_TITLE = "Playerbot commands";
-FishingTranslations["enUS"].AUTO_EDITOR_HINT = "One command per line. Lines starting with a dot are sent as server commands, lines starting with a slash as chat commands. %p = your name, %z = zone, %s = subzone.";
+FishingTranslations["enUS"].AUTO_EDITOR_HINT = "One command per line. '/w %p text' whispers your own self bot (use this). '/p' only reaches it inside a group (outside a group it is sent to your own bot instead); lines starting with a dot are server commands. Several 'nc' lines are merged into ONE command (the bot keeps only the last 'nc' per tick). The self-bot toggle is handled by the addon. %p = your name, %z = zone, %s = subzone.";
 FishingTranslations["enUS"].AUTO_EDITOR_START = "On start:";
-FishingTranslations["enUS"].AUTO_EDITOR_KEEP = "Keep-alive (resent when nothing is caught):";
+FishingTranslations["enUS"].AUTO_EDITOR_KEEP = "Re-set (used when the check finds the strategy gone):";
 FishingTranslations["enUS"].AUTO_EDITOR_STOP = "On stop:";
 FishingTranslations["enUS"].AUTO_EDITOR_SAVE = "Save";
 FishingTranslations["enUS"].AUTO_EDITOR_RESET = "Defaults";
@@ -309,8 +309,8 @@ FishingTranslations["enUS"].CONFIG_AUTOPANEL_ONOFF = "Show auto fishing panel";
 FishingTranslations["enUS"].CONFIG_AUTOPANEL_INFO = "Show the movable panel with the auto fishing toggle.";
 FishingTranslations["enUS"].CONFIG_AUTOPANELPOLE_ONOFF = "Only with a pole equipped";
 FishingTranslations["enUS"].CONFIG_AUTOPANELPOLE_INFO = "Hide the panel unless a fishing pole is equipped.";
-FishingTranslations["enUS"].CONFIG_AUTOKEEPALIVE_ONOFF = "Re-send commands when idle";
-FishingTranslations["enUS"].CONFIG_AUTOKEEPALIVE_INFO = "If nothing is caught for a while, send the keep-alive commands again.";
+FishingTranslations["enUS"].CONFIG_AUTOKEEPALIVE_ONOFF = "Check the bot when idle";
+FishingTranslations["enUS"].CONFIG_AUTOKEEPALIVE_INFO = "If nothing is caught for a while, ask the bot for its strategies and set 'master fishing' again if it is gone.";
 FishingTranslations["enUS"].CONFIG_AUTOBAGS_ONOFF = "Stop when bags are full";
 FishingTranslations["enUS"].CONFIG_AUTOBAGS_INFO = "Automatically stop auto fishing when your bags run out of space.";
 FishingTranslations["enUS"].CONFIG_AUTOCOMBAT_ONOFF = "Stop on combat";
@@ -321,7 +321,7 @@ FishingTranslations["enUS"].CONFIG_AUTOSOUND_ONOFF = "Play a sound on alerts";
 FishingTranslations["enUS"].CONFIG_AUTOSOUND_INFO = "Play a sound when auto fishing starts, stops or warns you.";
 FishingTranslations["enUS"].CONFIG_AUTOVERBOSE_ONOFF = "Verbose messages";
 FishingTranslations["enUS"].CONFIG_AUTOVERBOSE_INFO = "Also report keep-alive commands in the chat frame.";
-FishingTranslations["enUS"].CONFIG_AUTOIDLE_INFO = "How long to wait without a catch before re-sending the commands.";
+FishingTranslations["enUS"].CONFIG_AUTOIDLE_INFO = "How long to wait without a catch before checking the bot.";
 FishingTranslations["enUS"].CONFIG_AUTOMAX_INFO = "Stop automatically after this many minutes (0 = no limit).";
 FishingTranslations["enUS"].CONFIG_AUTOEDITOR_INFO = "Open the editor for the playerbot commands.";
 FishingTranslations["enUS"].STATS_TITLE = "Session statistics";
@@ -356,7 +356,7 @@ FishingTranslations["enUS"].BINDING_NAME_FISHINGBUDDY_AUTOFISH = "Toggle Auto Fi
 FishingTranslations["enUS"].BINDING_NAME_FISHINGBUDDY_AUTOPANEL = "Toggle Auto Fishing Panel";
 
 FishingTranslations["enUS"].AUTO_HELP = {
-      "|c#GREEN#/fb #AUTO#|r [|c#GREEN#on|r | |c#GREEN#off|r | |c#GREEN#lure|r | |c#GREEN#edit|r | |c#GREEN#panel|r | |c#GREEN#status|r | |c#GREEN#diag|r]",
+      "|c#GREEN#/fb #AUTO#|r [|c#GREEN#on|r | |c#GREEN#off|r | |c#GREEN#lure|r | |c#GREEN#edit|r | |c#GREEN#panel|r | |c#GREEN#status|r | |c#GREEN#diag|r | |c#GREEN#probe|r]",
       "    Toggle playerbot auto fishing. |c#GREEN#edit|r opens the command editor,",
       "    |c#GREEN#panel|r shows or hides the on-screen panel,",
       "    |c#GREEN#diag|r prints what the bot is doing (for troubleshooting).",
@@ -380,22 +380,36 @@ FishingTranslations["enUS"].CONFIG_AUTOAUTOLURE_INFO = "When the lure runs out, 
 FishingTranslations["enUS"].BINDING_NAME_FISHINGBUDDY_APPLYLURE = "Apply Best Fishing Lure";
 
 -- Auto-Angeln 0.9.10: Zustandsverfolgung, Pruefung, Diagnose
+FishingTranslations["enUS"].AUTO_STATE_STOPPING = "Auto Fishing: stopping ...";
+FishingTranslations["enUS"].AUTO_TRIP_ACTIVE = "An AutoTravel trip is running -- start auto fishing after you arrive.";
+FishingTranslations["enUS"].AUTO_WARN_BOTPAD_OLD = "Botpad before 1.3 in mode 'Minimal' takes away the bot's chat strategy: the bot will not hear Fishing Buddy. Update Botpad or pick another mode.";
+FishingTranslations["enUS"].AUTO_WORD_YES = "yes";
+FishingTranslations["enUS"].AUTO_WORD_NO = "no";
+FishingTranslations["enUS"].AUTO_WORD_UNKNOWN = "unknown";
+FishingTranslations["enUS"].AUTO_DIAG_STATE = "Auto fishing: %s, step %s, self bot %s, switched on by us: %s";
+FishingTranslations["enUS"].AUTO_DIAG_STRATEGIES = "Bot strategies (%d s ago): %s";
+FishingTranslations["enUS"].AUTO_DIAG_NOLIST = "No strategy list from the bot yet. If the self bot is off that is normal; /fb auto probe asks again.";
+FishingTranslations["enUS"].AUTO_DIAG_ENV = "Fishing pole: %s, mounted: %s, group: %s, in combat: %s";
+FishingTranslations["enUS"].AUTO_DIAG_ADDONS = "Botpad: %s%s, held by us: %s, AutoTravel: %s, AutoTravel trip running: %s";
+FishingTranslations["enUS"].AUTO_DIAG_TRACE = "Last messages (seconds ago; -> sent, <- received):";
+FishingTranslations["enUS"].AUTO_PROBE_SENT = "Asked the bot for its strategies. The answer (if any) shows up in /fb auto diag; no answer usually means the self bot is off.";
+FishingTranslations["enUS"].AUTO_PROBE_BUSY = "Auto fishing is busy talking to the bot -- try again in a moment.";
 FishingTranslations["enUS"].AUTO_STARTING = "Starting auto fishing -- checking the bot ...";
 FishingTranslations["enUS"].AUTO_STATE_STARTING = "Auto Fishing: starting ...";
 FishingTranslations["enUS"].AUTO_UNVERIFIED = "The bot did not answer the strategy check, so the start could not be confirmed. If nothing is cast: /fb auto diag";
 FishingTranslations["enUS"].AUTO_STOPPING = "The bot is still being stopped, please wait a moment.";
 FishingTranslations["enUS"].AUTO_DISMOUNT = "Dismount first -- the bot cannot fish while you are mounted.";
-FishingTranslations["enUS"].AUTO_WARN_MOUNTED = "You are mounted -- the bot cannot fish like this.";
+FishingTranslations["enUS"].AUTO_WARN_MOUNTED = "You are mounted -- the bot cannot fish like this. Dismount; with the option 'Keep the bot from mounting' it will not climb up again by itself.";
 FishingTranslations["enUS"].AUTO_WARN_CLASH = "Other bot strategies are active (%s); the bot may walk away or fight instead of fishing.";
 FishingTranslations["enUS"].AUTO_WARN_BOTPOLE = "The bot reports that it has no fishing pole.";
-FishingTranslations["enUS"].AUTO_ERR_REFUSED = "The server refuses the self bot: %s";
+FishingTranslations["enUS"].AUTO_ERR_REFUSED = "The server refuses the self bot: %s (server setting AiPlayerbot.SelfBotLevel: 0 = off, 1 = game masters only)";
 FishingTranslations["enUS"].AUTO_ERR_NOANSWER = "No answer to '.playerbots bot self'. Is mod-playerbots installed, and is the command allowed for your account?";
 FishingTranslations["enUS"].AUTO_ERR_TOGGLE = "The self bot did not stay switched on.";
 FishingTranslations["enUS"].AUTO_ERR_WHISPER = "Whispers to yourself are blocked. Game master accounts need '.whispers on' once.";
-FishingTranslations["enUS"].AUTO_ERR_STRATEGY = "The bot did not accept the strategy 'master fishing' after %d tries. Another addon (Botpad, AutoTravel), a stored strategy set, or the bot itself (no water within reach?) may be removing it -- see /fb auto diag.";
+FishingTranslations["enUS"].AUTO_ERR_STRATEGY = "The bot did not accept the strategy 'master fishing' after %d tries. Another addon (Botpad, AutoTravel), a stored strategy set, your own command lists (/fb auto edit) or the bot itself (no water within reach?) may be removing it -- see /fb auto diag.";
 FishingTranslations["enUS"].AUTO_REASON_ENDED = "the bot ended fishing by itself -- no water within reach?";
 FishingTranslations["enUS"].AUTO_REASON_BOTOFF = "the self bot was switched off";
-FishingTranslations["enUS"].AUTO_NOTE_PARTYLINE = "'%s' goes to the party chat, but you are not in a group, so the server would drop it. Use '/w %%p ...' to reach your own bot.";
+FishingTranslations["enUS"].AUTO_NOTE_PARTYLINE = "'%s' goes to the party chat, but you are not in a group, so the server would drop it. It is sent to your own bot instead (/w %%p ...).";
 FishingTranslations["enUS"].AUTO_NOTE_TOGGLELINE = "Removed '.playerbots bot self' from your command list: Fishing Buddy now switches the self bot by itself, and only when needed.";
 FishingTranslations["enUS"].CONFIG_AUTONOMOUNT_ONOFF = "Keep the bot from mounting";
 FishingTranslations["enUS"].CONFIG_AUTONOMOUNT_INFO = "A self bot with a mount climbs into the saddle on its own, and nobody can fish while mounted. Turns the bot strategy 'mount' off while fishing and back on afterwards.";
