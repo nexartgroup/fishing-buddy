@@ -1,0 +1,9 @@
+# Scenarios that are EXPECTED to fail today (one name per line, '#' = comment).
+# They document pessimistic assumptions about the 3.3.5a client or hard dependencies.
+# When a fix lands, the scenario starts to PASS (reported as XPASS) -- delete its line.
+#
+# no-NONE_KEY          : FishingOutfitManager.lua:278 / LibFishing-1.0.lua:463 use the global NONE_KEY.
+#                        Fails only if the client does not define NONE_KEY (UNVERIFIED); does not affect Auto fishing.
+# whatif-tourist-fails : LibTourist is a hard dependency of LibFishing (informational).
+no-NONE_KEY
+whatif-tourist-fails

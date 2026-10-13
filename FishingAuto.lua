@@ -7,12 +7,23 @@
 -- Server-/Chat-Kommandos, die den Playerbot das Angeln uebernehmen lassen,
 -- und ueberwacht danach den Ablauf (Koeder, Taschen, Kampf, Stillstand).
 --
--- Alle Kommandos sind frei konfigurierbar (siehe Kommando-Editor),
+-- Die Strategiebefehle sind frei konfigurierbar (siehe Kommando-Editor),
 -- damit das Modul auch mit abweichenden Playerbot-Builds funktioniert.
 --
--- ACHTUNG: ".playerbots bot self" ist ein Umschalter. Es gehoert deshalb in
--- den Start- UND in den Stopp-Block, aber NICHT in den Nachfass-Block --
--- sonst wuerde das Nachfassen den Self-Bot wieder abschalten.
+-- Wie der Selbstbot erreicht wird (aus dem Quelltext von AzerothCore und
+-- mod-playerbots, nicht aus einem Spieltest):
+--  * ".playerbots bot self" ist ein UMSCHALTER. Das Modul kennt deshalb den
+--    Zustand: es liest die Systemmeldungen des Servers ("SelfBot is now
+--    active." / "... deactivated." / Verweigerungen) und fragt den Bot mit
+--    "nc ?" nach seinen Strategien, bevor es schaltet. Es schaltet nur, wenn
+--    der Bot nicht schon an ist, und am Ende nur aus, was es selbst eingeschaltet
+--    hat.
+--  * Gruppenchat ("/p ...") erreicht den Selbstbot nur in einer Gruppe: der
+--    Server verwirft die Nachricht eines Spielers ohne Gruppe stillschweigend.
+--    Strategiebefehle gehen deshalb als Fluestern an den eigenen Charakter
+--    ("/w %p ..."), das funktioniert mit und ohne Gruppe.
+--  * Nach dem Setzen prueft das Modul per "nc ?", ob "master fishing" wirklich
+--    uebernommen wurde, und meldet es, wenn nicht.
 -- ---------------------------------------------------------------------------
 
 local FL = LibStub("LibFishing-1.0");
@@ -26,11 +37,33 @@ local Auto = FishingBuddy.Auto;
 -- ---------------------------------------------------------------------------
 
 -- %p = eigener Charaktername, %z = Zone, %s = Unterzone
-local DEFAULT_START = ".playerbots bot self\n/p nc +master fishing";
-local DEFAULT_KEEP  = "/p nc +master fishing";
-local DEFAULT_STOP  = "/p nc -master fishing\n.playerbots bot self";
+local DEFAULT_START = "/w %p nc +master fishing";
+local DEFAULT_KEEP  = "/w %p nc +master fishing";
+local DEFAULT_STOP  = "/w %p nc -master fishing";
 -- Koeder auftragen lassen. %l = Itemlink, %i = Item-ID, %n = Itemname
-local DEFAULT_LURE  = "/p u %l";
+local DEFAULT_LURE  = "/w %p u %l";
+
+-- Standardwerte fruehere Fassungen (0.9.9-enhanced). Wer sie nie geaendert hat,
+-- bekommt die neuen; geaenderte Bloecke bleiben unangetastet.
+local OLD_DEFAULTS = {
+   AutoFishStartCommands     = { ".playerbots bot self\n/p nc +master fishing" },
+   AutoFishKeepAliveCommands = { "/p nc +master fishing" },
+   AutoFishStopCommands      = { "/p nc -master fishing\n.playerbots bot self" },
+   AutoFishLureCommands      = { "/p u %l" },
+};
+
+-- Zeiten (Sekunden)
+local PROBE_WAIT    = 2.5;    -- Antwort auf "nc ?" abwarten
+local TOGGLE_WAIT   = 5.0;    -- Bestaetigung von ".playerbots bot self" abwarten
+local SETTLE_PLAIN  = 1.0;    -- Pause nach dem Einschalten
+local SETTLE_BOTPAD = 3.5;    -- ... wenn Botpad ohne Hold-Schnittstelle laeuft (Salve ~2 s)
+local VERIFY_DELAY  = 2.5;    -- zwischen Setzen der Strategie und Pruefung
+local RETRY_DELAY   = 3.0;    -- vor einem erneuten Setzen
+local MAX_TRIES     = 3;      -- Versuche, "master fishing" zu setzen
+local MAX_VANISH    = 3;      -- so oft darf die Strategie verschwinden, dann gilt das Angeln als beendet
+local STOP_WAIT     = 20;     -- so lange auf die Rueckname der Strategie warten, bevor ausgeschaltet wird
+local ECHO_WINDOW   = 30;     -- so lange gelten eigene Fluesterbefehle als "eigene" (Echo ausblenden)
+local TRACE_MAX     = 40;
 
 local UPDATE_INTERVAL = 0.5;      -- Panel-Refresh
 local WATCHDOG_INTERVAL = 2.0;    -- Ueberwachung
@@ -52,7 +85,6 @@ local running = false;
 local startedAt = 0;
 local pausedReason = nil;
 local lastFishAt = 0;
-local lastKeepAliveAt = 0;
 local lastWatchdogAt = 0;
 local lastPanelAt = 0;
 local fishCount = 0;
@@ -62,6 +94,18 @@ local lureTriedAt = 0;
 local lureTries = 0;
 local lureGaveUp = false;
 local lureNeeded = false;
+
+-- Selbstbot: nil = unbekannt, true = an, false = aus (letzte Meldung des Servers)
+local selfState = nil;
+local session = nil;          -- laufende Sitzung (Start bis Stopp), siehe Start()
+local stopping = nil;         -- laufende Abschaltung, siehe Stop()
+local trace = {};             -- Ringpuffer fuer "/fb auto diag"
+local recent = {};            -- eigene Fluesterbefehle: Text -> Zeit (Echos ausblenden)
+local lastProbeAt = 0;
+local lastStrategies = nil;   -- letzte Strategieliste des Bots (Rohtext)
+local lastStrategiesAt = 0;
+local botpadHeld = false;
+local mountWarnedAt = 0;
 
 local panel, statusText, detailText, toggleButton, lureButton;
 
@@ -125,6 +169,43 @@ end
 Auto.LureSecondsLeft = LureSecondsLeft;
 
 -- ---------------------------------------------------------------------------
+-- Protokoll und Erkennung eigener Befehle
+-- ---------------------------------------------------------------------------
+
+local function Trace(text)
+   trace[#trace + 1] = string.format("%.1f  %s", GetTime(), text);
+   if ( #trace > TRACE_MAX ) then
+      table.remove(trace, 1);
+   end
+end
+
+-- Gleicher Spieler? (Fluestern an/von sich selbst; ein "-Realm" wird abgeschnitten)
+local function IsMe(name)
+   local me = UnitName("player");
+   if ( type(name) ~= "string" or not me ) then
+      return false;
+   end
+   name = (string.gsub(name, "%-.*$", ""));
+   return string.lower(name) == string.lower(me);
+end
+
+-- Merkt sich einen eigenen Fluesterbefehl. Der Server liefert ihn als "An <Name>"
+-- und als "<Name> fluestert" zurueck; beide Echos filtert EchoFilter aus dem Chat.
+local function RememberOwn(text)
+   local now = GetTime();
+   recent[text] = now;
+   for k, t in pairs(recent) do
+      if ( now - t > ECHO_WINDOW ) then
+         recent[k] = nil;
+      end
+   end
+end
+
+local function IsGrouped()
+   return ((GetNumPartyMembers() or 0) > 0) or ((GetNumRaidMembers() or 0) > 0);
+end
+
+-- ---------------------------------------------------------------------------
 -- Kommando-Ausfuehrung
 -- ---------------------------------------------------------------------------
 
@@ -164,10 +245,13 @@ local function Substitute(line, extra)
    return line;
 end
 
+local partyNoted = false;     -- Hinweis auf Gruppenchat ohne Gruppe nur einmal je Sitzung
+
 -- Fuehrt eine einzelne Zeile aus.
 --  ".befehl"       -> Server-Kommando (wird als SAY geschickt, AzerothCore
 --                     faengt Nachrichten mit fuehrendem Punkt ab)
---  "/p text"       -> Chatnachricht im entsprechenden Kanal
+--  "/w NAME text"  -> Fluestern (an sich selbst: so erreicht man den Selbstbot)
+--  "/p text"       -> Chatnachricht im entsprechenden Kanal (ohne Gruppe verworfen)
 --  "/irgendwas"    -> normaler Slashbefehl (Fallback ueber die Chatbox)
 --  alles andere    -> als SAY
 local function ExecuteLine(line, extra)
@@ -178,6 +262,7 @@ local function ExecuteLine(line, extra)
 
    if ( string.sub(line, 1, 1) ~= "/" ) then
       -- Server-Kommando oder einfacher Text
+      Trace("-> say: "..line);
       SendChatMessage(line, "SAY");
       return;
    end
@@ -188,6 +273,17 @@ local function ExecuteLine(line, extra)
       local chattype = CHATTYPES[slash];
       if ( chattype ) then
          if ( rest and rest ~= "" ) then
+            if ( chattype == "PARTY" and not IsGrouped() ) then
+               -- Der Server verwirft Gruppenchat von einem Spieler ohne Gruppe
+               -- stillschweigend; der Selbstbot bekaeme ihn nie zu sehen.
+               if ( not partyNoted ) then
+                  partyNoted = true;
+                  Warn(string.format(FBConstants.AUTO_NOTE_PARTYLINE, line));
+               end
+               Trace("skipped (not in a group): "..line);
+               return;
+            end
+            Trace("-> "..string.lower(chattype)..": "..rest);
             SendChatMessage(rest, chattype);
          end
          return;
@@ -195,6 +291,10 @@ local function ExecuteLine(line, extra)
       if ( WHISPERTYPES[slash] ) then
          local _, _, target, text = string.find(rest or "", "^(%S+)%s+(.*)$");
          if ( target and text and text ~= "" ) then
+            if ( IsMe(target) ) then
+               RememberOwn(text);
+            end
+            Trace("-> /w "..target..": "..text);
             SendChatMessage(text, "WHISPER", nil, target);
          end
          return;
@@ -234,7 +334,37 @@ local function ExecuteBlock(block, extra)
 end
 Auto.ExecuteBlock = ExecuteBlock;
 
-local function GetBlock(setting, fallback)
+-- Ein einzelner Fluesterbefehl an den eigenen Charakter (= an den Selbstbot)
+local function WhisperSelf(text)
+   ExecuteLine("/w %p "..text);
+end
+
+-- ".playerbots bot self" gehoert nicht mehr in die Bloecke: das Modul schaltet
+-- selbst und nur bei Bedarf. Alte, gespeicherte Bloecke enthalten die Zeile noch.
+local function IsToggleLine(line)
+   return string.find(string.lower(trim(line)), "^%.playerbots?%s+bot%s+self$") ~= nil;
+end
+
+local toggleNoted = false;
+
+local function RemoveToggleLines(block)
+   local out, removed = {}, 0;
+   for line in string.gmatch(block.."\n", "([^\r\n]*)\r?\n") do
+      if ( IsToggleLine(line) ) then
+         removed = removed + 1;
+      else
+         out[#out + 1] = line;
+      end
+   end
+   if ( removed > 0 and not toggleNoted ) then
+      toggleNoted = true;
+      Warn(FBConstants.AUTO_NOTE_TOGGLELINE);
+   end
+   return table.concat(out, "\n");
+end
+
+-- Rohtext des gespeicherten Blocks (oder der Standard), unveraendert
+local function GetBlockRaw(setting, fallback)
    local value = FishingBuddy.GetSetting(setting);
    if ( value == nil or trim(value) == "" ) then
       return fallback;
@@ -242,16 +372,246 @@ local function GetBlock(setting, fallback)
    return value;
 end
 
+-- Block, wie er ausgefuehrt wird
+local function GetBlock(setting, fallback)
+   local block = RemoveToggleLines(GetBlockRaw(setting, fallback));
+   if ( trim(block) == "" ) then
+      return fallback;
+   end
+   return block;
+end
+
+-- Gleicher Inhalt ohne Leerzeilen und Zeilenenden-Unterschiede
+local function NormalizeBlock(text)
+   local lines = {};
+   for line in string.gmatch((text or "").."\n", "([^\r\n]*)\r?\n") do
+      line = trim(line);
+      if ( line ~= "" ) then
+         lines[#lines + 1] = line;
+      end
+   end
+   return table.concat(lines, "\n");
+end
+
+-- Gespeicherte Bloecke, die noch den alten Standard enthalten, werden verworfen,
+-- damit der neue Standard gilt. Selbst geaenderte bleiben unangetastet.
+local function MigrateBlocks()
+   for setting, olds in pairs(OLD_DEFAULTS) do
+      local saved = FishingBuddy.GetSetting(setting);
+      if ( type(saved) == "string" and trim(saved) ~= "" ) then
+         local norm = NormalizeBlock(saved);
+         for _, old in ipairs(olds) do
+            if ( norm == old ) then
+               FishingBuddy.SetSetting(setting, nil);
+               break;
+            end
+         end
+      end
+   end
+end
+Auto.MigrateBlocks = MigrateBlocks;
+
+-- ---------------------------------------------------------------------------
+-- Antworten des Servers lesen
+-- ---------------------------------------------------------------------------
+
+-- Meldungen von mod-playerbots ("self", PlayerbotMgr.cpp):
+--     "SelfBot is now active."                       eingeschaltet
+--     "SelfBot is now deactivated."                  ausgeschaltet
+--     "SelfBot is disabled server-wide."             AiPlayerbot.SelfBotLevel = 0
+--     "SelfBot is restricted for this account."      SelfBotLevel = 1, kein Spielleiter
+-- Aeltere Staende: "Enable/Disable player botAI". Dieselben Muster nutzen Botpad
+-- und AutoTravel.
+local ON_PATTERNS     = { "selfbot is now active", "enable player botai", "playerbot ai enabled" };
+local OFF_PATTERNS    = { "selfbot is now deactivated", "disable player botai", "playerbot ai disabled" };
+local REFUSE_PATTERNS = { "selfbot is disabled server-wide", "selfbot is restricted for this account",
+                          "playerbot system is currently disabled", "you cannot control bots yet" };
+
+local function MatchAny(low, list)
+   for _, p in ipairs(list) do
+      if ( string.find(low, p, 1, true) ) then
+         return true;
+      end
+   end
+   return false;
+end
+
+-- "Strategies: a, b, c" -> { a = true, b = true, c = true }, Rohliste
+local function ParseStrategies(msg)
+   local list = string.match(msg, "^[Ss]trategies:%s*(.-)%s*$");
+   if ( not list ) then
+      return nil;
+   end
+   local set = {};
+   for name in string.gmatch(list, "[^,]+") do
+      name = string.lower(trim(name));
+      if ( name ~= "" ) then
+         set[name] = true;
+      end
+   end
+   return set, list;
+end
+Auto.ParseStrategies = ParseStrategies;
+
+-- Der Server meldet "Kein Spieler namens X" fuer Fluestern an Konten mit
+-- abgeschalteten Fluesternachrichten (Spielleiter: ".whispers on").
+local function IsWhisperRefused(low)
+   local me = UnitName("player");
+   if ( not me ) then
+      return false;
+   end
+   if ( ERR_CHAT_PLAYER_NOT_FOUND_S and
+        low == string.lower(string.format(ERR_CHAT_PLAYER_NOT_FOUND_S, me)) ) then
+      return true;
+   end
+   return false;
+end
+
+local SessionEvent;           -- unten definiert
+
+local function OnSystemMessage(msg)
+   if ( type(msg) ~= "string" ) then
+      return;
+   end
+   local low = string.lower(msg);
+   if ( MatchAny(low, REFUSE_PATTERNS) ) then
+      selfState = false;
+      Trace("<- system: "..msg);
+      SessionEvent("refused", msg);
+   elseif ( MatchAny(low, ON_PATTERNS) ) then
+      selfState = true;
+      Trace("<- system: "..msg);
+      SessionEvent("on", msg);
+   elseif ( MatchAny(low, OFF_PATTERNS) ) then
+      selfState = false;
+      Trace("<- system: "..msg);
+      SessionEvent("off", msg);
+   elseif ( IsWhisperRefused(low) ) then
+      Trace("<- system: "..msg);
+      SessionEvent("whisperrefused", msg);
+   end
+end
+
+local noPoleNoted = false;
+
+local function OnWhisper(msg, author)
+   if ( type(msg) ~= "string" or not IsMe(author) ) then
+      return;
+   end
+   local set, raw = ParseStrategies(msg);
+   if ( set ) then
+      lastStrategies = raw;
+      lastStrategiesAt = GetTime();
+      selfState = true;
+      Trace("<- strategies: "..raw);
+      SessionEvent("strategies", set);
+   elseif ( (session or stopping) and not noPoleNoted
+            and string.find(string.lower(msg), "fishing pole", 1, true) ) then
+      -- "I don't have a Fishing Pole" (FishingAction.cpp)
+      noPoleNoted = true;
+      Trace("<- bot: "..msg);
+      Warn(FBConstants.AUTO_WARN_BOTPOLE);
+   end
+end
+
+-- Chatfilter: die Echos der eigenen Fluesterbefehle und die Antwort auf "nc ?"
+-- sind Technik und gehoeren nicht in den Chat.
+local function EchoFilter(self, event, msg, author)
+   if ( type(self) == "string" ) then
+      -- aeltere Aufrufform ohne self
+      event, msg, author = self, event, msg;
+   end
+   if ( type(msg) ~= "string" ) then
+      return false;
+   end
+   local ok, hide = pcall(FishingBuddy.GetSettingBool, "AutoFishHideEcho");
+   if ( ok and not hide ) then
+      return false;
+   end
+   local now = GetTime();
+   if ( event == "CHAT_MSG_WHISPER_INFORM" ) then
+      local t = recent[msg];
+      return (t and (now - t) < ECHO_WINDOW) and true or false;
+   elseif ( event == "CHAT_MSG_WHISPER" and IsMe(author) ) then
+      local t = recent[msg];
+      if ( t and (now - t) < ECHO_WINDOW ) then
+         return true;
+      end
+      if ( string.find(string.lower(msg), "^strategies:") and (now - lastProbeAt) < 15 ) then
+         return true;
+      end
+   end
+   return false;
+end
+
+if ( ChatFrame_AddMessageEventFilter ) then
+   ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER", EchoFilter);
+   ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER_INFORM", EchoFilter);
+end
+
+local chatEvents = CreateFrame("Frame");
+chatEvents:RegisterEvent("CHAT_MSG_SYSTEM");
+chatEvents:RegisterEvent("CHAT_MSG_WHISPER");
+chatEvents:SetScript("OnEvent", function(self, event, msg, author)
+   if ( event == "CHAT_MSG_SYSTEM" ) then
+      OnSystemMessage(msg);
+   elseif ( event == "CHAT_MSG_WHISPER" ) then
+      OnWhisper(msg, author);
+   end
+end);
+
+-- ---------------------------------------------------------------------------
+-- Zusammenspiel mit Botpad und AutoTravel
+-- ---------------------------------------------------------------------------
+
+-- Botpad setzt bei JEDER Einschaltmeldung seinen Modus (nc !, co !, ...) und
+-- wuerde "master fishing" wieder entfernen. Ab Botpad 1.3 kann man es bitten, die
+-- Finger von den Strategien zu lassen.
+local function HoldBotpad()
+   local bp = rawget(_G, "Botpad");
+   if ( not botpadHeld and bp and bp.Bot and bp.Bot.Hold ) then
+      bp.Bot.Hold("Fishing Buddy");
+      botpadHeld = true;
+      Trace("botpad: hold");
+   end
+end
+
+local function ReleaseBotpad()
+   local bp = rawget(_G, "Botpad");
+   if ( botpadHeld and bp and bp.Bot and bp.Bot.Release ) then
+      bp.Bot.Release("Fishing Buddy");
+      Trace("botpad: release");
+   end
+   botpadHeld = false;
+end
+
+-- Pause nach dem Einschalten: eine aeltere Botpad-Fassung (ohne Hold) schickt
+-- danach rund 2 s lang ihre eigenen Strategien.
+local function SettleDelay()
+   local bp = rawget(_G, "Botpad");
+   if ( bp and bp.Bot and not bp.Bot.Hold ) then
+      return SETTLE_BOTPAD;
+   end
+   return SETTLE_PLAIN;
+end
+
+-- Waehrend einer AutoTravel-Reise setzt AutoTravel selbst Strategien (nc !) und
+-- bewegt den Charakter; dazwischen nichts nachschieben.
+local function TripActive()
+   local at = rawget(_G, "AutoTravel");
+   return at and at.active and true or false;
+end
+
 -- ---------------------------------------------------------------------------
 -- Start / Stop
 -- ---------------------------------------------------------------------------
 
 local UpdatePanel;   -- vorwaerts deklariert
+local Start, Stop;
 
 local function ResetCounters()
    startedAt = GetTime();
    lastFishAt = GetTime();
-   lastKeepAliveAt = GetTime();
    fishCount = 0;
    lureWarnedAt = 0;
    bagWarnedAt = 0;
@@ -261,8 +621,258 @@ local function ResetCounters()
    pausedReason = nil;
 end
 
-local function Start(silent)
+local function SendProbe()
+   lastProbeAt = GetTime();
+   WhisperSelf("nc ?");
+end
+
+local function Fail(text)
+   Warn(text);
+   PlayAlert();
+   Stop(true, nil, true);
+end
+
+-- "master fishing" (und bei Bedarf "-mount") an den Bot schicken
+local function Prepare(s)
+   if ( FishingBuddy.GetSettingBool("AutoFishNoMount") and s.strategies
+        and s.strategies["mount"] and not s.mountRemoved ) then
+      -- Ein Selbstbot mit Reittier setzt sich von selbst auf (Strategie "mount"),
+      -- und im Sattel laesst sich nicht angeln.
+      WhisperSelf("nc -mount");
+      s.mountRemoved = true;
+   end
+   ExecuteBlock(GetBlock("AutoFishStartCommands", DEFAULT_START));
+   s.prepared = true;
+   s.step = "verifywait";
+   s.due = GetTime() + VERIFY_DELAY;
+end
+
+local function Confirm(s, unverified)
+   local now = GetTime();
+   s.step = "run";
+   s.due = nil;
+   s.lastCheck = now;
+   lastFishAt = now;
+   if ( unverified ) then
+      Warn(FBConstants.AUTO_UNVERIFIED);
+   else
+      Say(Crayon:Green(FBConstants.AUTO_STARTED));
+   end
+   local set = s.strategies;
+   if ( set ) then
+      local clash = {};
+      for _, name in ipairs({ "grind", "rpg", "new rpg", "travel" }) do
+         if ( set[name] ) then
+            clash[#clash + 1] = name;
+         end
+      end
+      if ( #clash > 0 ) then
+         Warn(string.format(FBConstants.AUTO_WARN_CLASH, table.concat(clash, ", ")));
+      end
+   end
+   PlayAlert();
+   UpdatePanel(true);
+end
+
+-- Die Strategie ist nach einer Pruefung nicht da: erneut versuchen oder aufgeben
+local function Missing(s)
+   s.tries = s.tries + 1;
+   if ( s.tries >= MAX_TRIES ) then
+      Fail(string.format(FBConstants.AUTO_ERR_STRATEGY, s.tries));
+      return;
+   end
+   s.step = "settle";
+   s.due = GetTime() + RETRY_DELAY;
+end
+
+local function ToggleOn(s)
+   s.step = "toggle";
+   s.due = GetTime() + TOGGLE_WAIT;
+   Trace("-> say: .playerbots bot self");
+   SendChatMessage(".playerbots bot self", "SAY");
+end
+
+-- Ergebnis der regelmaessigen Kontrolle im Betrieb
+local function HealthResult(s, set)
+   s.step = "run";
+   s.due = nil;
+   if ( set["master fishing"] ) then
+      s.present = (s.present or 0) + 1;
+      if ( s.present >= 3 ) then
+         s.vanish = 0;
+      end
+      return;
+   end
+   s.present = 0;
+   s.vanish = s.vanish + 1;
+   Trace("health: master fishing missing ("..s.vanish..")");
+   if ( s.vanish >= MAX_VANISH ) then
+      -- Der Bot nimmt die Strategie selbst zurueck ("end master fishing"), wenn
+      -- im Umkreis kein Wasser liegt.
+      Stop(nil, FBConstants.AUTO_REASON_ENDED);
+      return;
+   end
+   if ( FishingBuddy.GetSettingBool("AutoFishVerbose") ) then
+      Say(FBConstants.AUTO_KEEPALIVE);
+   end
+   ExecuteBlock(GetBlock("AutoFishKeepAliveCommands", DEFAULT_KEEP));
+end
+
+-- Wird von den Chatereignissen aufgerufen
+SessionEvent = function(kind, arg)
+   if ( not session ) then
+      if ( stopping and kind == "strategies" and not arg["master fishing"] ) then
+         Auto.FinishShutdown();
+      end
+      return;
+   end
+   local s = session;
+   local step = s.step;
+   local now = GetTime();
+
+   if ( kind == "refused" ) then
+      if ( step == "probe" or step == "toggle" ) then
+         Fail(string.format(FBConstants.AUTO_ERR_REFUSED, arg or ""));
+      end
+   elseif ( kind == "whisperrefused" ) then
+      if ( step == "probe" or step == "verify" or step == "verifywait" or step == "settle" ) then
+         Fail(FBConstants.AUTO_ERR_WHISPER);
+      end
+   elseif ( kind == "on" ) then
+      if ( step == "toggle" ) then
+         -- After a corrective second toggle the bot is back in the state it was
+         -- in before: it was on already (and deaf), so it is not ours to switch off.
+         s.ownsBot = not s.retoggled;
+         s.step = "settle";
+         s.due = now + SettleDelay();
+      end
+   elseif ( kind == "off" ) then
+      if ( step == "toggle" ) then
+         -- Der Bot war doch schon an (und hat auf "nc ?" nicht geantwortet).
+         if ( not s.retoggled ) then
+            s.retoggled = true;
+            ToggleOn(s);
+         else
+            Fail(FBConstants.AUTO_ERR_TOGGLE);
+         end
+      elseif ( step ~= "probe" ) then
+         -- Jemand hat den Selbstmodus ausgeschaltet.
+         Stop(nil, FBConstants.AUTO_REASON_BOTOFF);
+      end
+   elseif ( kind == "strategies" ) then
+      s.strategies = arg;
+      s.sawReply = true;
+      if ( step == "probe" ) then
+         -- Der Bot lebt und hoert zu: nicht umschalten.
+         s.step = "settle";
+         s.due = now + SettleDelay();
+      elseif ( step == "preprobe" ) then
+         Prepare(s);
+      elseif ( step == "verify" ) then
+         if ( arg["master fishing"] ) then
+            Confirm(s);
+         else
+            Missing(s);
+         end
+      elseif ( step == "check" ) then
+         HealthResult(s, arg);
+      end
+   end
+end
+
+local function SessionTick(now)
+   local s = session;
+   if ( not s or not s.due or now < s.due ) then
+      return;
+   end
+   local step = s.step;
+   if ( step == "probe" ) then
+      -- keine Antwort auf "nc ?": der Bot ist aus -- einschalten
+      ToggleOn(s);
+   elseif ( step == "toggle" ) then
+      Fail(FBConstants.AUTO_ERR_NOANSWER);
+   elseif ( step == "settle" ) then
+      if ( s.strategies and (now - lastStrategiesAt) < 15 ) then
+         Prepare(s);
+      else
+         -- Die Liste der Strategien kennen wir noch nicht (der Bot war aus oder hat
+         -- nicht geantwortet): jetzt fragen, bevor etwas veraendert wird.
+         s.step = "preprobe";
+         s.due = now + PROBE_WAIT;
+         SendProbe();
+      end
+   elseif ( step == "preprobe" ) then
+      Prepare(s);                -- keine Antwort: ohne Liste weitermachen
+   elseif ( step == "verifywait" ) then
+      s.step = "verify";
+      s.due = now + PROBE_WAIT;
+      SendProbe();
+   elseif ( step == "verify" ) then
+      if ( s.sawReply ) then
+         Missing(s);
+      else
+         -- Der Bot antwortet nie auf "nc ?" (der Client zeigt keine Fluesternachricht
+         -- von sich selbst, oder die Antwort wurde unterdrueckt). Nicht aufgeben.
+         Confirm(s, true);
+      end
+   elseif ( step == "check" ) then
+      s.step = "run";       -- keine Antwort: unklar, nichts unternehmen
+      s.due = nil;
+   end
+end
+
+-- Abschalten: erst die Strategie zuruecknehmen, DANN den Bot ausschalten. Ein
+-- ausgeschalteter Bot fuehrt eine noch wartende Anweisung nicht mehr aus, und
+-- die Strategie bliebe in der Datenbank stehen (sie wird beim naechsten
+-- Einschalten wieder geladen).
+function Auto.FinishShutdown()
+   local st = stopping;
+   if ( not st ) then
+      return;
+   end
+   stopping = nil;
+   if ( st.ownsBot and selfState ~= false ) then
+      Trace("-> say: .playerbots bot self (off)");
+      SendChatMessage(".playerbots bot self", "SAY");
+   end
+   ReleaseBotpad();
+end
+
+local function StopTick(now)
+   local st = stopping;
+   if ( not st or now < st.due ) then
+      return;
+   end
+   if ( now - st.started >= STOP_WAIT ) then
+      Trace("shutdown: timed out waiting for the strategy to go");
+      Auto.FinishShutdown();
+      return;
+   end
+   if ( st.step == "wait" ) then
+      st.step = "probe";
+      st.due = now + PROBE_WAIT;
+      SendProbe();
+   else
+      st.step = "wait";
+      st.due = now + 0.5;
+   end
+end
+
+local driver = CreateFrame("Frame");
+driver:SetScript("OnUpdate", function()
+   if ( session or stopping ) then
+      local now = GetTime();
+      SessionTick(now);
+      StopTick(now);
+   end
+end);
+
+Start = function(silent)
    if ( running ) then
+      return;
+   end
+   if ( stopping ) then
+      Warn(FBConstants.AUTO_STOPPING);
       return;
    end
 
@@ -271,27 +881,44 @@ local function Start(silent)
       PlayAlert();
       return;
    end
+   if ( IsMounted and IsMounted() ) then
+      Warn(FBConstants.AUTO_DISMOUNT);
+      PlayAlert();
+      return;
+   end
 
    running = true;
    ResetCounters();
-   ExecuteBlock(GetBlock("AutoFishStartCommands", DEFAULT_START));
-
+   partyNoted = false;
+   noPoleNoted = false;
+   session = {
+      step = "probe", due = GetTime() + PROBE_WAIT,
+      tries = 0, vanish = 0, lastCheck = 0,
+      ownsBot = false, retoggled = false, sawReply = false,
+      mountRemoved = false, prepared = false, strategies = nil,
+   };
+   Trace("start");
+   HoldBotpad();
    if ( not silent ) then
-      Say(Crayon:Green(FBConstants.AUTO_STARTED));
+      Say(Crayon:Green(FBConstants.AUTO_STARTING));
    end
-   PlayAlert();
    FishingBuddy.RunHandlers(FBConstants.AUTO_START_EVT);
+   SendProbe();
    UpdatePanel(true);
 end
 
-local function Stop(silent, reason)
+-- silent: keine Meldung; failed: Abbruch beim Start (keine Zusammenfassung);
+-- quick: sofort ausschalten (Abmelden, /reload), ohne auf den Bot zu warten
+Stop = function(silent, reason, failed, quick)
    if ( not running ) then
       return;
    end
+   local s = session;
    running = false;
-   ExecuteBlock(GetBlock("AutoFishStopCommands", DEFAULT_STOP));
+   session = nil;
+   Trace("stop"..(reason and (": "..reason) or ""));
 
-   if ( not silent ) then
+   if ( not silent and not failed ) then
       local elapsed = GetTime() - startedAt;
       local text = Crayon:Red(FBConstants.AUTO_STOPPED);
       if ( reason ) then
@@ -302,6 +929,21 @@ local function Stop(silent, reason)
    end
    PlayAlert();
    FishingBuddy.RunHandlers(FBConstants.AUTO_STOP_EVT);
+
+   if ( s and s.prepared and selfState ~= false ) then
+      ExecuteBlock(GetBlock("AutoFishStopCommands", DEFAULT_STOP));
+      if ( s.mountRemoved ) then
+         WhisperSelf("nc +mount");
+      end
+   end
+   if ( s and s.ownsBot and selfState ~= false ) then
+      stopping = { ownsBot = true, started = GetTime(), due = GetTime() + 1.0, step = "wait" };
+      if ( quick or not s.prepared ) then
+         Auto.FinishShutdown();
+      end
+   else
+      ReleaseBotpad();
+   end
    UpdatePanel(true);
 end
 
@@ -317,6 +959,23 @@ Auto.Start = Start;
 Auto.Stop = Stop;
 Auto.Toggle = Toggle;
 Auto.IsRunning = function() return running; end
+
+-- Zustand fuer Anzeige, Diagnose und Tests
+function Auto.GetState()
+   return {
+      running = running,
+      starting = (running and session and session.step ~= "run") and true or false,
+      step = session and session.step or (stopping and "stopping") or "idle",
+      selfState = selfState,
+      ownsBot = (session and session.ownsBot) or (stopping and stopping.ownsBot) or false,
+      strategies = lastStrategies,
+      holdingBotpad = botpadHeld,
+   };
+end
+
+function Auto.GetTrace()
+   return trace;
+end
 
 -- ---------------------------------------------------------------------------
 -- Watchdog
@@ -436,16 +1095,23 @@ local function RunWatchdog()
    -- 6) Koeder abgelaufen
    HandleLure(now);
 
-   -- 7) Stillstand -> Kommandos nachschieben
-   if ( FishingBuddy.GetSettingBool("AutoFishKeepAlive") ) then
+   -- 7) Stillstand: pruefen, ob der Bot noch angelt, und die Strategie bei Bedarf
+   --    erneut setzen. Nicht blind senden -- der Bot antwortet auf "nc ?" mit
+   --    seiner Strategieliste.
+   if ( session and session.step == "run" and FishingBuddy.GetSettingBool("AutoFishKeepAlive") ) then
       local idle = FishingBuddy.GetSetting("AutoFishIdleSeconds") or 45;
-      if ( (now - lastFishAt) > idle and (now - lastKeepAliveAt) > idle ) then
-         lastKeepAliveAt = now;
-         ExecuteBlock(GetBlock("AutoFishKeepAliveCommands", DEFAULT_KEEP));
-         if ( FishingBuddy.GetSettingBool("AutoFishVerbose") ) then
-            Say(FBConstants.AUTO_KEEPALIVE);
-         end
+      if ( (now - lastFishAt) > idle and (now - session.lastCheck) > idle and not TripActive() ) then
+         session.lastCheck = now;
+         session.step = "check";
+         session.due = now + PROBE_WAIT;
+         SendProbe();
       end
+   end
+
+   -- 8) Im Sattel kann der Bot nicht angeln
+   if ( session and session.step == "run" and IsMounted and IsMounted() and (now - mountWarnedAt) > 60 ) then
+      mountWarnedAt = now;
+      Warn(FBConstants.AUTO_WARN_MOUNTED);
    end
 end
 
@@ -546,7 +1212,11 @@ UpdatePanel = function(force)
       if ( elapsed > 30 ) then
          rate = fishCount / (elapsed / 3600);
       end
-      statusText:SetText(Crayon:Green(FBConstants.AUTO_ON));
+      if ( session and session.step ~= "run" ) then
+         statusText:SetText(Crayon:Orange(FBConstants.AUTO_STATE_STARTING));
+      else
+         statusText:SetText(Crayon:Green(FBConstants.AUTO_ON));
+      end
       detailText:SetText(string.format("%s  |  %d %s  |  %d/h",
                                        FormatTime(elapsed), fishCount,
                                        FBConstants.FISH, math.floor(rate + 0.5)));
@@ -822,7 +1492,7 @@ local function ShowEditor()
    end
 
    for _, box in ipairs(editor.boxes) do
-      box:SetText(GetBlock(box.info.setting, box.info.default));
+      box:SetText(GetBlockRaw(box.info.setting, box.info.default));
       box:SetCursorPosition(0);
    end
    editor:Show();
@@ -846,6 +1516,14 @@ local AutoOptions = {
    ["AutoFishKeepAlive"] = {
       ["text"] = FBConstants.CONFIG_AUTOKEEPALIVE_ONOFF,
       ["tooltip"] = FBConstants.CONFIG_AUTOKEEPALIVE_INFO,
+      ["v"] = 1, ["m"] = 1, ["default"] = 1 },
+   ["AutoFishNoMount"] = {
+      ["text"] = FBConstants.CONFIG_AUTONOMOUNT_ONOFF,
+      ["tooltip"] = FBConstants.CONFIG_AUTONOMOUNT_INFO,
+      ["v"] = 1, ["m"] = 1, ["default"] = 1 },
+   ["AutoFishHideEcho"] = {
+      ["text"] = FBConstants.CONFIG_AUTOHIDEECHO_ONOFF,
+      ["tooltip"] = FBConstants.CONFIG_AUTOHIDEECHO_INFO,
       ["v"] = 1, ["m"] = 1, ["default"] = 1 },
    ["AutoFishStopBagsFull"] = {
       ["text"] = FBConstants.CONFIG_AUTOBAGS_ONOFF,
@@ -939,6 +1617,31 @@ end
 -- Slash-Kommando
 -- ---------------------------------------------------------------------------
 
+-- Alles, was zur Fehlersuche gebraucht wird, in den Chat
+local function YesNo(v) return v and "yes" or "no"; end
+
+local function PrintDiagnosis()
+   local st = Auto.GetState();
+   local bp = rawget(_G, "Botpad");
+   local at = rawget(_G, "AutoTravel");
+   local sf = "unknown";
+   if ( st.selfState == true ) then sf = "on"; elseif ( st.selfState == false ) then sf = "off"; end
+   Say("Auto fishing: "..(st.running and "running" or "off")..", step "..st.step
+       ..", self bot "..sf..", switched on by us: "..YesNo(st.ownsBot));
+   if ( lastStrategies ) then
+      Say(string.format("Bot strategies (%d s ago): %s", math.floor(GetTime() - lastStrategiesAt), lastStrategies));
+   else
+      Say("Bot strategies: no answer to 'nc ?' yet (/fb "..FBConstants.AUTO.." probe)");
+   end
+   Say("Pole: "..YesNo(FL:IsFishingPole())..", mounted: "..YesNo(IsMounted and IsMounted())
+       ..", group: "..YesNo(IsGrouped())..", in combat: "..YesNo(InCombatLockdown()));
+   Say("Botpad: "..YesNo(bp and bp.Bot)..(botpadHeld and " (held by us)" or "")
+       ..", AutoTravel: "..YesNo(at and at.Start ~= nil)..(TripActive() and " (trip active)" or ""));
+   for _, line in ipairs(trace) do
+      Say("  "..line);
+   end
+end
+
 FishingBuddy.Commands[FBConstants.AUTO] = {};
 FishingBuddy.Commands[FBConstants.AUTO].help = FBConstants.AUTO_HELP;
 FishingBuddy.Commands[FBConstants.AUTO].func =
@@ -975,6 +1678,12 @@ FishingBuddy.Commands[FBConstants.AUTO].func =
          else
             Say(FBConstants.AUTO_OFF);
          end
+      elseif ( what == "diag" ) then
+         PrintDiagnosis();
+      elseif ( what == "probe" ) then
+         -- fragt den Bot nach seinen Strategien; die Antwort steht danach in "diag"
+         SendProbe();
+         Say("nc ? ...  /fb "..FBConstants.AUTO.." diag");
       else
          return false;
       end
@@ -1016,7 +1725,7 @@ end;
 
 AutoEvents[FBConstants.LOGOUT_EVT] = function()
    if ( running ) then
-      Stop(true);
+      Stop(true, nil, false, true);
    end
 end;
 
@@ -1037,6 +1746,7 @@ AutoEvents["VARIABLES_LOADED"] = function()
                                            "Interface\\Icons\\Trade_Fishing",
                                            AutoOptions);
    FishingBuddy.OptionsFrame.HandleOptions(nil, nil, InvisibleOptions);
+   MigrateBlocks();
    CreatePanel();
    UpdatePanel(true);
    SetupLureBinding();

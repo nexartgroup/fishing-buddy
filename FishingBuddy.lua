@@ -836,8 +836,8 @@ local QuestItems = {};
 QuestItems[6717] = {
    ["enUS"] = "Gaffer Jack",
    ["deDE"] = "Klemm-Muffen",
-   ["esES"] = "Mecanismo eléctrico",
-   ["frFR"] = "Rouage électrique",
+   ["esES"] = "Mecanismo el\195\169ctrico",
+   ["frFR"] = "Rouage \195\169lectrique",
 };
 QuestItems[6718] = {
    ["enUS"] = "Electropeller",
@@ -857,8 +857,8 @@ QuestItems[16968] = {
 };
 QuestItems[16969] = {
    ["enUS"] = "Savage Coast Blue Sailfin",
-   ["deDE"] = "Blauwimpel von der ungezähmten Küste",
-   ["frFR"] = "Sailfin bleu de la Côte sauvage",
+   ["deDE"] = "Blauwimpel von der ungez\195\164hmten K\195\188ste",
+   ["frFR"] = "Sailfin bleu de la C\195\180te sauvage",
 };
 QuestItems[16967] = {
    ["enUS"] = "Feralas Ahi",
@@ -1696,7 +1696,10 @@ FishingBuddy.OnEvent = function(self, event, ...)
       self:UnregisterEvent("ITEM_LOCK_CHANGED");
       self:UnregisterEvent("PLAYER_EQUIPMENT_CHANGED");
    end
-   FishingBuddy.Extravaganza.IsTime(true);
+   -- The contest module needs Astrolabe; without it the other modules must still get their events.
+   if ( FishingBuddy.Extravaganza and FishingBuddy.Extravaganza.IsTime ) then
+      FishingBuddy.Extravaganza.IsTime(true);
+   end
    RunHandlers(event, ...);
    RunHandlers("*", ...);
 end

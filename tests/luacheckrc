@@ -1,0 +1,73 @@
+-- luacheck configuration for the Fishing Buddy offline audit (WoW 3.3.5a / Lua 5.1)
+-- Whitelists the real WoW API / FrameXML globals the addon uses so that what luacheck
+-- still reports is a typo, an accidental global, or an unavailable name.
+std = "lua51"
+max_line_length = false
+-- only global-variable findings (111/112/113); style findings are noise for this audit
+only = { "11" }
+files["localization*.lua"] = { globals = { "FishingTranslations" } }
+-- third-party libraries bundled in Libs/ (upstream code, accidental globals are not ours to fix)
+files["Libs/LibCrayon-3.0/**"] = { ignore = { "11" } }
+files["Libs/LibBabble-Zone-3.0/**"] = { ignore = { "11" } }
+files["Libs/LibTourist-3.0/**"] = { ignore = { "11" } }
+files["Libs/Astrolabe/**"] = { ignore = { "11" } }
+files["Libs/LibStub/**"] = { ignore = { "11" } }
+read_globals = {
+   -- Lua 5.0 aliases and WoW additions to the Lua environment
+   "tinsert", "tremove", "strsub", "strfind", "strlen", "strlower", "strupper", "strrep", "strbyte", "strchar", "strmatch",
+   "floor", "ceil", "abs", "min", "max", "sin", "cos", "random", "format", "gsub", "getglobal", "setglobal", "wipe", "date", "time",
+   "hooksecurefunc", "getn", "strtrim", "strsplit", "strjoin", "bit",
+   -- widgets / frames provided by FrameXML
+   "UIParent", "WorldFrame", "GameTooltip", "Minimap", "UIErrorsFrame", "DEFAULT_CHAT_FRAME", "ChatFrameEditBox", "ChatFrame1EditBox",
+   "ChatFontNormal", "GearManagerDialog", "UIPanelWindows", "UISpecialFrames", "SlashCmdList", "StaticPopupDialogs",
+   -- API functions
+   "CreateFrame", "GetTime", "GetGameTime", "CalendarGetDate", "GetLocale", "GetBuildInfo", "GetRealmName", "GetAddOnMetadata", "GetAddOnInfo",
+   "GetCVar", "SetCVar", "UnitName", "UnitIsDeadOrGhost", "InCombatLockdown", "UnitBuff", "UnitCastingInfo", "IsMounted", "IsFlying", "GetNumPartyMembers", "GetNumRaidMembers", "ERR_CHAT_PLAYER_NOT_FOUND_S", "ChatFrame_AddMessageEventFilter",
+   "IsMouselooking", "MouselookStop", "IsShiftKeyDown", "IsControlKeyDown", "IsAltKeyDown", "GetCursorPosition", "GetScreenWidth",
+   "GetPlayerFacing", "GetPlayerMapPosition", "GetMoney", "GetRealZoneText", "GetSubZoneText", "GetPVPDesired", "SetPVP",
+   "GetMapContinents", "GetContainerNumSlots", "SendChatMessage", "PlaySound", "MouseIsOver",
+   "UnitRace", "UnitLevel", "SetMapZoom", "GetMapInfo", "GetMapZones", "UpdateMapHighlight", "SetMapToCurrentZone", "WorldMapFrame",
+   "debugstack", "GetFramerate", "GetCurrentMapContinent", "GetCurrentMapZone", "IsLoggedIn", "ChatFrame1", "geterrorhandler",
+   "GetInventorySlotInfo", "GetInventoryItemLink", "GetItemInfo", "GetItemQualityColor", "GetItemCount", "GetItemCooldown",
+   "GetContainerNumFreeSlots", "GetContainerItemLink", "GetWeaponEnchantInfo", "EquipItemByName",
+   "GetSpellTexture", "GetSpellName", "GetNumSkillLines", "GetSkillLineInfo", "HasAction", "IsAttackAction", "GetActionInfo", "GetActionTexture",
+   "IsFishingLoot", "GetNumLootItems", "LootSlotIsItem", "GetLootSlotInfo", "GetLootSlotLink",
+   "GetBindingKey", "GetBindingText", "ClearOverrideBindings", "SetOverrideBindingClick",
+   "GetNumTrackingTypes", "GetTrackingInfo", "GetTrackingTexture", "SetTracking",
+   "GetNumCompanions", "GetCompanionInfo", "CallCompanion", "DismissCompanion",
+   "GetEquipmentSetInfo", "GetEquipmentSetInfoByName", "GetEquipmentSetLocations", "SaveEquipmentSet", "DeleteEquipmentSet",
+   "EquipmentManager_EquipSet", "EquipmentManager_UnpackLocation", "EquipmentManagerClearIgnoredSlotsForSave",
+   "EquipmentManagerIgnoreSlotForSave", "EquipmentManagerUnignoreSlotForSave",
+   "GetMacroItemIconInfo", "GetNumMacroIcons", "ChatEdit_SendText", "ChatFrame_RemoveAllMessageGroups", "FCF_OpenNewWindow", "FCF_SetLocked",
+   "ShowUIPanel", "HideUIPanel", "UpdateMicroButtons", "PanelTemplates_SetNumTabs", "PanelTemplates_SetTab", "PanelTemplates_TabResize",
+   "PanelTemplates_Tab_OnClick", "UIDropDownMenu_SetWidth", "UIDropDownMenu_SetSelectedValue", "UIDropDownMenu_SetText",
+   "UIDropDownMenu_AddButton", "UIDropDownMenu_Initialize", "ToggleDropDownMenu", "UIFrameFadeIn", "UIFrameFadeOut", "UIFrameIsFading",
+   "FauxScrollFrame_GetOffset", "FauxScrollFrame_Update", "GameTooltip_AddNewbieTip",
+   -- global strings / constants
+   "UNKNOWN", "UNKNOWNOBJECT", "UKNOWNBEING", "NONE", "GENERAL", "SAVE", "RESET", "SKILL", "ITEM_BIND_QUEST", "PET_TYPE_PET",
+   "GUILD_BANK_TAB_INFO", "EQUIPMENT_MANAGER", "NUM_BAG_SLOTS", "NUM_CHAT_WINDOWS", "BACKPACK_CONTAINER", "BOOKTYPE_SPELL",
+   "SPELL_FAILED_FISHING_TOO_LOW", "SPELL_FAILED_LOW_CASTLEVEL", "SPELL_FAILED_TRY_AGAIN", "ERR_FISH_ESCAPED", "UIERRORS_HOLD_TIME",
+   "CHAT_MSG_SKILL", "MYADDONS_CATEGORY_PROFESSIONS", "NORMAL_FONT_COLOR", "GRAY_FONT_COLOR", "ITEM_QUALITY_COLORS",
+   "TOOLTIP_DEFAULT_COLOR", "TOOLTIP_DEFAULT_BACKGROUND_COLOR", "MAX_PLAYER_LEVEL",
+   -- optional third party (nil when absent; the code checks)
+   "myAddOnsFrame_Register", "Outfitter", "gOutfitter_Settings", "FishingAce", "FB_MergeDatabase",
+   "Outfitter_FindOutfitByStatID", "Outfitter_DeleteOutfit", "Outfitter_RemoveOutfit", "Outfitter_OnLoad", "Outfitter_GetOutfitFromListItem",
+   "OutfitterItemList_GetEquippableItems", "Outfitter_cFishingStatName",
+   "DongleStub", "LibStub",
+}
+globals = {
+   -- the addon's own globals
+   "FishingBuddy", "FBConstants", "FishingBuddy_Info", "FishingBuddy_Player", "FishingTranslations",
+   "SLASH_fishingbuddy1", "SLASH_fishingbuddy2", "FishingBuddy_ToggleAutoFishing", "ToggleFishingBuddyFrame",
+   "FishingBuddyFrameTab_OnClick", "FishingBuddyFrame_OnLoad", "FishingBuddyFrame_OnEvent", "FishingBuddyFrame_OnShow", "FishingBuddyFrame_OnHide",
+   "FishingBuddy_ToggleMinimap", "FishingLocationsCollapseAllButton_OnClick", "GearSetButton_OnEnter", "ToggleMinimap",
+   "Outfitter_FindOutfitByStatID",
+   -- frames created by the addon's XML (named globals)
+   "FishingBuddyRoot", "FishingBuddy_PostCastUpdateFrame", "FishingBuddyTooltip", "FishingBuddyFrame", "FishingBuddyFramePortrait", "FishingBuddyNameText",
+   "FishingOptionsFrame", "FishingLocationsFrame", "FishingLocationHighlightFrame", "FishingLocationsCollapseAllButton", "FishingLocationsSwitchButton",
+   "FishingLocsScrollFrame", "FishingLocsScrollFrameScrollBar", "FishingOutfitUpdateFrame", "FishingOutfitterFrame",
+   "FishingBuddyOption_OutfitManager", "FishingBuddyOption_OutfitMenu", "FishingBuddyOption_OutfitText", "FishingBuddyOption_EasyCastKeys",
+   "FishingBuddyOptionSLZ", "FishingBuddyMinimapFrame", "FishingBuddyMinimapButton", "FishingBuddyMinimapButton_MoveButton",
+   "FishingExtravaganzaFrame", "FishingExtravaganzaFrameText", "FishingExtravaganzaPOIUpdate", "FishingBuddy_WatchTimeFrame",
+   "FishingWatchDrag", "FishingWatchFrame", "FishingWatchTab", "FishingFluffPetMenu", "FB_FishingButton",
+}

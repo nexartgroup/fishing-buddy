@@ -324,7 +324,7 @@ end
 FishingBuddy.Extravaganza.OnEvent = function(self, event, ...)
    if ( event == "CHAT_MSG_YELL" ) then
       -- Riggle Bassbait yells: We have a winner! (.*) is the Master Angler!
-      local e,s,n = string.find(arg1, FBConstants.RIGGLE_BASSBAIT);
+      local e,s,n = string.find((...), FBConstants.RIGGLE_BASSBAIT);
       if ( e ) then
          ContestIsOver = true;
       end

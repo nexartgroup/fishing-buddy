@@ -4,7 +4,7 @@
 	<Frame name="FishingOutfitUpdateFrame" hidden="true">
 		<Scripts>
 			<OnUpdate>
-				FishingBuddy.OutfitManager.WaitForUpdate(self, arg1);
+				FishingBuddy.OutfitManager.WaitForUpdate(self, elapsed);
 			</OnUpdate>
 		</Scripts>
 	</Frame>

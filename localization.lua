@@ -356,9 +356,10 @@ FishingTranslations["enUS"].BINDING_NAME_FISHINGBUDDY_AUTOFISH = "Toggle Auto Fi
 FishingTranslations["enUS"].BINDING_NAME_FISHINGBUDDY_AUTOPANEL = "Toggle Auto Fishing Panel";
 
 FishingTranslations["enUS"].AUTO_HELP = {
-      "|c#GREEN#/fb #AUTO#|r [|c#GREEN#on|r | |c#GREEN#off|r | |c#GREEN#lure|r | |c#GREEN#edit|r | |c#GREEN#panel|r | |c#GREEN#status|r]",
+      "|c#GREEN#/fb #AUTO#|r [|c#GREEN#on|r | |c#GREEN#off|r | |c#GREEN#lure|r | |c#GREEN#edit|r | |c#GREEN#panel|r | |c#GREEN#status|r | |c#GREEN#diag|r]",
       "    Toggle playerbot auto fishing. |c#GREEN#edit|r opens the command editor,",
-      "    |c#GREEN#panel|r shows or hides the on-screen panel.",
+      "    |c#GREEN#panel|r shows or hides the on-screen panel,",
+      "    |c#GREEN#diag|r prints what the bot is doing (for troubleshooting).",
 };
 FishingTranslations["enUS"].STATS_HELP = {
       "|c#GREEN#/fb #STATS#|r [|c#GREEN##RESET#|r]",
@@ -377,3 +378,26 @@ FishingTranslations["enUS"].AUTO_EDITOR_LURE = "Apply lure (%l = link, %i = id, 
 FishingTranslations["enUS"].CONFIG_AUTOAUTOLURE_ONOFF = "Let the bot apply lures";
 FishingTranslations["enUS"].CONFIG_AUTOAUTOLURE_INFO = "When the lure runs out, send the configured command so the playerbot applies a new one by itself.";
 FishingTranslations["enUS"].BINDING_NAME_FISHINGBUDDY_APPLYLURE = "Apply Best Fishing Lure";
+
+-- Auto-Angeln 0.9.10: Zustandsverfolgung, Pruefung, Diagnose
+FishingTranslations["enUS"].AUTO_STARTING = "Starting auto fishing -- checking the bot ...";
+FishingTranslations["enUS"].AUTO_STATE_STARTING = "Auto Fishing: starting ...";
+FishingTranslations["enUS"].AUTO_UNVERIFIED = "The bot did not answer the strategy check, so the start could not be confirmed. If nothing is cast: /fb auto diag";
+FishingTranslations["enUS"].AUTO_STOPPING = "The bot is still being stopped, please wait a moment.";
+FishingTranslations["enUS"].AUTO_DISMOUNT = "Dismount first -- the bot cannot fish while you are mounted.";
+FishingTranslations["enUS"].AUTO_WARN_MOUNTED = "You are mounted -- the bot cannot fish like this.";
+FishingTranslations["enUS"].AUTO_WARN_CLASH = "Other bot strategies are active (%s); the bot may walk away or fight instead of fishing.";
+FishingTranslations["enUS"].AUTO_WARN_BOTPOLE = "The bot reports that it has no fishing pole.";
+FishingTranslations["enUS"].AUTO_ERR_REFUSED = "The server refuses the self bot: %s";
+FishingTranslations["enUS"].AUTO_ERR_NOANSWER = "No answer to '.playerbots bot self'. Is mod-playerbots installed, and is the command allowed for your account?";
+FishingTranslations["enUS"].AUTO_ERR_TOGGLE = "The self bot did not stay switched on.";
+FishingTranslations["enUS"].AUTO_ERR_WHISPER = "Whispers to yourself are blocked. Game master accounts need '.whispers on' once.";
+FishingTranslations["enUS"].AUTO_ERR_STRATEGY = "The bot did not accept the strategy 'master fishing' after %d tries. Another addon (Botpad, AutoTravel), a stored strategy set, or the bot itself (no water within reach?) may be removing it -- see /fb auto diag.";
+FishingTranslations["enUS"].AUTO_REASON_ENDED = "the bot ended fishing by itself -- no water within reach?";
+FishingTranslations["enUS"].AUTO_REASON_BOTOFF = "the self bot was switched off";
+FishingTranslations["enUS"].AUTO_NOTE_PARTYLINE = "'%s' goes to the party chat, but you are not in a group, so the server would drop it. Use '/w %%p ...' to reach your own bot.";
+FishingTranslations["enUS"].AUTO_NOTE_TOGGLELINE = "Removed '.playerbots bot self' from your command list: Fishing Buddy now switches the self bot by itself, and only when needed.";
+FishingTranslations["enUS"].CONFIG_AUTONOMOUNT_ONOFF = "Keep the bot from mounting";
+FishingTranslations["enUS"].CONFIG_AUTONOMOUNT_INFO = "A self bot with a mount climbs into the saddle on its own, and nobody can fish while mounted. Turns the bot strategy 'mount' off while fishing and back on afterwards.";
+FishingTranslations["enUS"].CONFIG_AUTOHIDEECHO_ONOFF = "Hide bot whispers in chat";
+FishingTranslations["enUS"].CONFIG_AUTOHIDEECHO_INFO = "Hides the whispers Fishing Buddy sends to your own bot, and the bot's answers.";

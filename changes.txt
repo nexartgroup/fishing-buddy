@@ -1,3 +1,30 @@
+0.9.10-enhanced
+- FIX: Auto-Angeln tat bei einem Spieler ohne Gruppe nichts. "/p nc +master
+  fishing" ist Gruppenchat; der Server verwirft ihn ohne Gruppe
+  stillschweigend, der Selbstbot bekam die Strategie nie. Die Befehle gehen
+  jetzt als Fluestern an den eigenen Charakter ("/w %p ...").
+- FIX: ".playerbots bot self" ist ein Umschalter. Start schaltete einen schon
+  laufenden Selbstbot (Botpad, AutoTravel, Servereinstellung) AUS, Stopp
+  schaltete ihn EIN. Das AddOn liest jetzt die Serverantworten, fragt den Bot
+  per "nc ?" und schaltet nur bei Bedarf; ausgeschaltet wird am Ende nur, was
+  es selbst eingeschaltet hat, und erst nachdem die Strategie zurueckgenommen
+  wurde.
+- NEU: Pruefung. Nach dem Setzen zeigt "nc ?", ob "master fishing" beim Bot
+  angekommen ist; sonst bis zu drei Versuche und eine klare Meldung
+  (Verweigerung durch den Server, Bot antwortet nicht, Fluestern gesperrt ...).
+  Im Betrieb fragt die Kontrolle bei Stillstand nach, statt blind zu senden.
+- NEU: "nc -mount" waehrend des Angelns (Option), Warnung im Sattel.
+- NEU: Zusammenspiel mit Botpad (Hold/Release ab Botpad 1.3) und AutoTravel
+  (Ruhe waehrend einer Reise).
+- NEU: /fb auto diag und /fb auto probe zur Fehlersuche.
+- NEU: Bot-Fluestern im Chat ausblenden (Option, Standard an).
+- FIX: UTF-8-Marke (BOM) am Anfang von LibFishing-1.0.lua, localization.zhCN.lua
+  und localization.zhTW.lua entfernt; fehlendes Zeilenende nach der letzten
+  Zeile der TOC; ungueltige UTF-8-Bytes in localization.de.lua und
+  FishingBuddy.lua; this/arg1 in XML- und Ereignisbehandlern durch self/
+  elapsed/... ersetzt; ein ausgefallenes FishingExtravaganza.lua (Astrolabe)
+  legt die anderen Module nicht mehr lahm.
+- NEU: tests/ -- Offline-Tests (Laden, Auto-Angeln gegen ein Servermodell).
 0.9.9-enhanced
 - BUGFIX: FishingSchools.lua -- ComputeDistance() wurde mit (x, x) statt
   (x, y) aufgerufen; Fischschwaerme wurden mehrfach angelegt.
