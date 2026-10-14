@@ -1,3 +1,39 @@
+0.9.10-enhanced (Nachtrag: Angel-Schleife)
+- NEU: Auto-Angeln steuert jeden Wurf selbst, statt dem Bot nur die Strategie
+  "master fishing" zu geben. Der Charakter wird dort abgestellt, wo geangelt
+  werden soll; dann laeuft bis zum Ausschalten eine Schleife: Koeder auftragen,
+  wenn einer da ist und keiner sitzt; Fluestern "do move near water"; Fluestern
+  "do go fishing"; warten, bis der Fisch gefangen ist; von vorn.
+  Grund: Die Strategie "master fishing" ueberlaesst dem Bot die Platzwahl und
+  das Nachwerfen (Wassersuche, Abstand zu "Master", Strategie-Konflikte). Die
+  beiden "do"-Befehle fuehrt der Bot sofort aus (auch ein frisch eingeschalteter
+  oder auf den Schwimmer wartender Bot), und der Koeder wird vor dem Wurf
+  aufgetragen, nie mitten im Angeln.
+- NEU: Der Befehlsblock "Angel-Schleife" (vor jedem Wurf gesendet) ersetzt die
+  Bloecke "Beim Start" und "Neu setzen". Gespeicherte Werte der alten Bloecke
+  werden nicht mehr benutzt; eigene Zeilen daraus gehoeren in die Schleife.
+- GEAENDERT: Der Start bereitet nur noch vor, was dem Angeln im Weg steht:
+  "-mount" und eine uebrig gebliebene Strategie "master fishing", als ein
+  Befehl und nur, wenn noetig. Der Stopp sendet nur dann eine Rueckname, wenn
+  "mount" zurueckzugeben ist (oder der Block "Beim Stoppen" geaendert wurde);
+  sonst wird der Bot sofort ausgeschaltet.
+- GEAENDERT: Die Kontrolle bei Stillstand und ihre Optionen ("Bot bei
+  Stillstand pruefen", Schieber "Stillstand") entfallen; stattdessen beendet die
+  Schleife den Lauf mit einer Meldung, wenn der Bot fuenfmal in Folge nicht
+  auswirft.
+- GEAENDERT: Koeder: der Befehl geht vor dem naechsten Wurf hinaus, drei
+  Versuche im Abstand von etwa 9 s, danach wird ohne Koeder weitergeangelt.
+- NEU: Ist der Charakter AFK, antwortet der Server auf jedes Fluestern an sich
+  selbst mit einer Systemmeldung (zwei je Wurf). Sie wird ausgeblendet (Option
+  "Bot-Fluestern im Chat ausblenden"); der AFK-Status bleibt, weil er die
+  Abmelde-Sperre fuer den Selbstbot ausloest.
+- FIX: Hinweistext nennt die Servereinstellung jetzt mit dem neuen Praefix
+  (Playerbots.SelfBotLevel statt AiPlayerbot.SelfBotLevel).
+- Tests: tests/harness/botserver.lua kennt die "do"-Befehle (sofort ausgefuehrt,
+  Kanalisierung, Biss, Fang), Optionen water/bite/catch/walk/lure_applies; neue
+  Szenarien auto-loop-*; die Szenarien der Strategie-Betriebsart (Kontrolle,
+  verschwindende Strategie) wurden entfernt oder umgeschrieben.
+
 0.9.10-enhanced
 - FIX: Auto-Angeln tat bei einem Spieler ohne Gruppe nichts. "/p nc +master
   fishing" ist Gruppenchat; der Server verwirft ihn ohne Gruppe

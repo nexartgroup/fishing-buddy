@@ -75,16 +75,22 @@ sends (written from the C++ sources, rule by rule with file/line comments; NOT m
     an identical repeat is harmless and not counted)
   * a freshly activated self bot is deaf for ~10 s (first AI tick + PassiveDelay); a bot with 'master fishing'
     can sleep through the bobber wait (option busy = { cycle, sleep })
+  * 'do <action>' whispers (PlayerbotAI::HandleCommand -> DoSpecificAction) are executed WHEN THEY ARRIVE, not in
+    the next AI update, also by a deaf bot: 'do move near water' sets the fishing spot, 'do go fishing' needs it
+    and starts a channel that ends at the bite (option bite) with loot (option catch) -- the Auto loop's model.
+    Failing 'do' commands are silent: PlayerbotAI::TellError never reaches a self bot.  Options: water, walk,
+    lure_applies (and the model's 'u <lure>': a 5 s cast, then the lure sits)
   * 'nc +x,-y,~z,!,?' are handled item by item ('!' after the others); the set is stored on every change and
     restored (plus 'chat') at the next activation; without the strategy 'chat' the bot ignores every command
   * options: latency, AI tick, deaf window, a bot that drops 'master fishing' by itself, a bot that never
     accepts it (ignore_fishing), a mount that makes the bot mount, a client that never shows the bot's answer,
     a missing module, ...
 The scenarios named auto-* (see --list) drive the Auto module against it: solo player, bot already on (awake
-and still deaf), refusals, deaf bot, Botpad with and without the Hold interface (and a failing Hold), vanishing
-strategy, a bot that never accepts the strategy, mount, chat echoes, a sleeping bot, slow connections, a bot
-switched off by somebody else, saved-settings migration, custom blocks, AutoTravel trip, logout / /reload
-(also while the removal is still pending), diag command.  auto-real-botpad loads a real Botpad checkout when
+and still deaf), refusals, deaf bot, Botpad with and without the Hold interface (and a failing Hold), a bot
+that never reads the preparation, mount, chat echoes, a sleeping bot, slow connections, a bot switched off by
+somebody else, saved-settings migration, custom blocks, AutoTravel trip, logout / /reload (also while the
+removal is still pending), diag command, and the loop itself (auto-loop-*: pairs of 'do' whispers, no water,
+a walk to the shore, a fish that gets away, mounting during a run, an immediate Stop).  auto-real-botpad loads a real Botpad checkout when
 BOTPAD_DIR (or ../BotPad) points to one; without one it is reported as SKIP.
 `--trace` prints the Auto module's trace and every sent line for failing scenarios.
 

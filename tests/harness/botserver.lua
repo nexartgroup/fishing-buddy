@@ -25,7 +25,7 @@
 --     SetNextCheckDelay, FishValues.cpp) and reads no chat command until it wakes (up to ~15 s).
 --
 -- Options (all optional):
---   selfbot_level  AiPlayerbot.SelfBotLevel: 0 off, 1 GM only (server default), 2 everybody,
+--   selfbot_level  Playerbots.SelfBotLevel: 0 off, 1 GM only (server default), 2 everybody,
 --                  3+ everybody and switched on silently at login      (PlayerbotMgr.cpp:1100-1123, 1733)
 --   gm             the account is a game master (CanBeGameMaster)
 --   active         the self bot is ON when the test starts (awake: the deaf window is over)
@@ -37,17 +37,31 @@
 --   busy           { cycle = 30, sleep = 15 }: while 'master fishing' is set the AI sleeps the first
 --                  'sleep' seconds of every 'cycle' seconds (bobber wait)
 --   reply_visible  the client shows the bot's whisper to oneself (default true; UNVERIFIED on a real client)
---   repeat_delay   AiPlayerbot.RepeatDelay in whole seconds: the same reply text within it is not sent
+--   repeat_delay   Playerbots.RepeatDelay in whole seconds: the same reply text within it is not sent
 --                  again (PlayerbotAI.cpp:3041-3043, time(nullptr) arithmetic)
 --   whisper_filter GM account without '.whispers on': whispers to oneself are refused (ChatHandler.cpp:408)
 --   module_missing true: mod-playerbots is not installed ('There is no such command');
 --                  'say': AllowPlayerCommands=0 on a non-GM account (the line is spoken aloud)
---   disabled       AiPlayerbot.Enabled = 0
+--   disabled       Playerbots.Enabled = 0
 --   end_fishing_after  seconds after 'master fishing' was set that the bot drops it again by itself
 --                  (EndMasterFishingAction: no water within range; not saved to the DB)
 --   ignore_fishing the bot ignores '+master fishing' (as if the strategy name were unknown)
 --   mount_owned    the character owns a mount: with the strategy 'mount' it mounts itself on an AI
 --                  update after the deaf window (CheckMountStateAction.cpp), the cast takes 1.5 s
+--   water          false: no water within reach of the character ('do move near water' finds nothing)
+--   bite           seconds from the cast to the bite / end of the channel (default 12)
+--   catch          false: the fish gets away (the channel ends without loot)
+--   walk           seconds the bot walks to the shore after 'do move near water' (default 0 = already there);
+--                  while it walks, 'do go fishing' finds no valid spot (FishingAction::isUseful)
+--   lure_applies   false: 'u <lure>' does nothing (server without the command)
+--
+-- THE 'do' COMMANDS (PlayerbotAI::HandleCommand -> DoSpecificAction): executed WHEN THE WHISPER ARRIVES, not
+-- in the next AI update, and also by a deaf bot. TellError never reaches a self bot (the master has a
+-- PlayerbotAI: PlayerbotAI::TellError returns false), so a failing 'do' is silent.
+--   do move near water   sets the fishing spot to the current position when water is in range
+--                        (MoveNearWaterAction::isPossible); otherwise nothing
+--   do go fishing        needs that spot (FishingAction::isUseful), no mount, a pole; starts the channel,
+--                        which ends at the bite; the bot then uses the bobber and the catch is looted
 -- ---------------------------------------------------------------------------
 
 local Server = {}
@@ -60,7 +74,7 @@ local DEFAULT_NC = { "nc", "food", "chat", "follow", "default", "force rebuff", 
 -- strategy names the engine knows; an unknown name is ignored without a message (Engine.cpp:362-377)
 local KNOWN = {}
 for _, n in ipairs(DEFAULT_NC) do KNOWN[n] = true end
-for _, n in ipairs({ "master fishing", "grind", "rpg", "new rpg", "travel", "bdps", "dps assist", "pet",
+for _, n in ipairs({ "master fishing", "use bobber", "grind", "rpg", "new rpg", "travel", "bdps", "dps assist", "pet",
                      "heal", "cure", "stay", "guard", "debug" }) do KNOWN[n] = true end
 
 local function copy_set(list)
@@ -95,6 +109,16 @@ function Server.attach(env, opts)
    self.end_fishing_after = opts.end_fishing_after
    self.ignore_fishing = opts.ignore_fishing or false
    self.mount_owned = opts.mount_owned or false
+   self.water = opts.water ~= false
+   self.bite = opts.bite or 12
+   self.catch = opts.catch ~= false
+   self.walk = opts.walk or 0
+   self.lure_applies = opts.lure_applies ~= false
+   self.spot = false
+   self.walking = false
+   self.actions = {}           -- 'do' actions received: { t=, name= }
+   self.casts = 0              -- channels started by 'go fishing'
+   self.lures = 0              -- 'u <lure>' commands executed
    self.active = false
    self.nc = nil
    self.queue = {}             -- chat commands waiting for the next AI update
@@ -108,7 +132,7 @@ function Server.attach(env, opts)
    self.toggles = 0            -- how often '.playerbots bot self' was handled
    env.on_send = function(entry) self:receive(entry) end
    if opts.active or opts.login_auto then
-      -- login_auto: AiPlayerbot.SelfBotLevel > 2 switches the self bot on silently at every login
+      -- login_auto: Playerbots.SelfBotLevel > 2 switches the self bot on silently at every login
       -- (PlayerbotMgr.cpp:1733-1734); the client sees no message.
       self:activate(opts.active and true or false)
    end
@@ -174,6 +198,7 @@ function Server:deactivate()
    self.nc = nil
    self.queue = {}                           -- the PlayerbotAI (and its queue) is deleted
    self.fish_since = nil
+   self.spot = false
 end
 
 function Server:save()
@@ -239,6 +264,9 @@ function Server:update()
       end
    end
    if last_nc and self.nc.chat then self:run_nc(last_nc) end        -- no 'chat' strategy: no command triggers
+   for _, c in ipairs(q) do
+      if c:match("^u%s+") and self.nc.chat then self:use_lure() end
+   end
    -- triggers: an idle self bot with a mount and the strategy 'mount' mounts itself
    if self.mount_owned and self.nc.mount and not self.mounting and not env.world.mounted then
       self.mounting = true
@@ -285,6 +313,58 @@ function Server:run_nc(param)
       end
    elseif not self.nc["master fishing"] then
       self.fish_since = nil
+   end
+end
+
+-- 'u <lure>': UseAction applies the lure to the pole; the cast takes 5 s (the character is "casting")
+function Server:use_lure()
+   if not self.lure_applies then return end
+   local env = self.env
+   self.lures = self.lures + 1
+   env.world.casting = true
+   env:after(5, function()
+      env.world.casting = false
+      env.world.lure_seconds = 600
+      env.world.bags_have_lure = false
+   end)
+end
+
+-- 'do <action>': executed at once (see the header)
+function Server:do_action(name)
+   local env = self.env
+   local w = env.world
+   self.actions[#self.actions + 1] = { t = env.now, name = name }
+   if name == "move near water" then
+      if self.water and not self.walking then
+         if self.walk > 0 and not self.spot then
+            -- the bot has to walk to the shore first: no valid spot until it arrived
+            self.walking = true
+            w.speed = 7
+            env:after(self.walk, function()
+               w.speed = 0
+               self.walking = false
+               if self.active then self.spot = true end
+            end)
+         else
+            self.spot = true
+         end
+      end
+   elseif name == "go fishing" then
+      if not self.spot or w.mounted or w.channeling or w.casting or w.dead then return end
+      if not w.pole_equipped then
+         self:whisper("I don't have a Fishing Pole")
+         return
+      end
+      w.channeling = true
+      self.casts = self.casts + 1
+      env:after(self.bite, function()
+         w.channeling = false              -- the bobber was used (or the time ran out): the channel ends
+         if self.active and self.catch then
+            w.loot = { 13754 }
+            w.loot_is_fishing = true
+            env:fire("LOOT_OPENED")
+         end
+      end)
    end
 end
 
@@ -352,6 +432,10 @@ function Server:receive(e)
       self.env:after(self.latency, function()
          self.env:chat_event("CHAT_MSG_WHISPER", text, me)
          self.env:chat_event("CHAT_MSG_WHISPER_INFORM", text, me)
+         if self.env.world.afk then
+            -- Player::Whisper "announce afk or dnd message": a system message to the sender, also for a whisper to oneself
+            self.env:chat_event("CHAT_MSG_SYSTEM", me .. " is Away from Keyboard: Away from Keyboard")
+         end
       end)
       self:to_bot(text)
    end
@@ -360,6 +444,11 @@ end
 function Server:to_bot(text)
    self.env:after(self.latency, function()
       if not self.active then return end        -- no PlayerbotAI: a whisper to oneself is plain chat
+      local action = text:match("^do%s+(.+)$") or text:match("^d%s+(.+)$")
+      if action then
+         self:do_action(action)                  -- executed on arrival, not queued for the AI update
+         return
+      end
       self.queue[#self.queue + 1] = text
       self:arm(self.env.now)
    end)

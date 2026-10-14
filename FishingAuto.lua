@@ -7,8 +7,20 @@
 -- Server-/Chat-Kommandos, die den Playerbot das Angeln uebernehmen lassen,
 -- und ueberwacht danach den Ablauf (Koeder, Taschen, Kampf, Stillstand).
 --
--- Die Strategiebefehle sind frei konfigurierbar (siehe Kommando-Editor),
--- damit das Modul auch mit abweichenden Playerbot-Builds funktioniert.
+-- Die Befehle sind frei konfigurierbar (siehe Kommando-Editor), damit das Modul
+-- auch mit abweichenden Playerbot-Builds funktioniert.
+--
+-- Betriebsart "Schleife": Der Spieler stellt den Charakter dort ab, wo
+-- geangelt werden soll. Statt dem Bot die Strategie "master fishing" zu geben und
+-- ihm das Angeln zu ueberlassen, steuert dieses Modul jeden Wurf selbst, bis es
+-- ausgeschaltet wird:
+--   1. Koeder verfuegbar, aber nicht aufgetragen -> Koeder auftragen lassen
+--   2. fluestern an sich selbst: do move near water   (setzt den Angelplatz)
+--   3. fluestern an sich selbst: do go fishing        (wirft aus)
+--   4. warten, bis der Fisch gefangen ist (Kanalisierung beendet), dann von vorn
+-- Die "do"-Befehle fuehrt der Bot sofort beim Eintreffen aus (PlayerbotAI::HandleCommand ->
+-- DoSpecificAction), unabhaengig vom KI-Takt. Der Schwimmer wird vom Bot selbst
+-- eingeholt (Strategie "use bobber", die "go fishing" setzt).
 --
 -- Wie der Selbstbot erreicht wird (aus dem Quelltext von AzerothCore und
 -- mod-playerbots, nicht aus einem Spieltest):
@@ -37,17 +49,18 @@ local Auto = FishingBuddy.Auto;
 -- ---------------------------------------------------------------------------
 
 -- %p = eigener Charaktername, %z = Zone, %s = Unterzone
-local DEFAULT_START = "/w %p nc +master fishing";
-local DEFAULT_KEEP  = "/w %p nc +master fishing";
+-- Die Schleife: wird vor JEDEM Wurf gesendet. "do move near water" setzt den Angelplatz
+-- (steht der Charakter schon am Wasser, bleibt er dort), "do go fishing" wirft aus.
+local DEFAULT_LOOP  = "/w %p do move near water\n/w %p do go fishing";
+-- Beim Stoppen: eine Strategie "master fishing" (alte Betriebsart, von Hand gesetzt) zuruecknehmen
 local DEFAULT_STOP  = "/w %p nc -master fishing";
 -- Koeder auftragen lassen. %l = Itemlink, %i = Item-ID, %n = Itemname
 local DEFAULT_LURE  = "/w %p u %l";
 
--- Standardwerte fruehere Fassungen (0.9.9-enhanced). Wer sie nie geaendert hat,
--- bekommt die neuen; geaenderte Bloecke bleiben unangetastet.
+-- Standardwerte fruehere Fassungen. Wer sie nie geaendert hat, bekommt die neuen;
+-- geaenderte Bloecke bleiben unangetastet. (Die Bloecke "Beim Start" und "Neu setzen"
+-- der Strategie-Betriebsart gibt es nicht mehr; ihre gespeicherten Werte bleiben ungenutzt.)
 local OLD_DEFAULTS = {
-   AutoFishStartCommands     = { ".playerbots bot self\n/p nc +master fishing" },
-   AutoFishKeepAliveCommands = { "/p nc +master fishing" },
    AutoFishStopCommands      = { "/p nc -master fishing\n.playerbots bot self" },
    AutoFishLureCommands      = { "/p u %l" },
 };
@@ -65,17 +78,27 @@ local SETTLE_PLAIN  = 0.3;    -- Pause nach dem Einschalten
 local SETTLE_BOTPAD = 3.5;    -- ... wenn Botpad ohne Hold-Schnittstelle laeuft (Salve ~2 s)
 local COLD_WAIT     = 25;     -- Antwort auf das Setzen nach einem Kaltstart (Bot hoert erst nach ~10 s zu)
 local WARM_WAIT     = 20;     -- ... bei einem Bot, der schon lief (kann auf den Schwimmer warten)
-local CHECK_WAIT    = 20;     -- Antwort auf die Kontrolle im Betrieb
 local RETRY_DELAY   = 3.0;    -- vor einem erneuten Setzen
-local MAX_TRIES     = 3;      -- Versuche, "master fishing" zu setzen
-local MAX_VANISH    = 3;      -- so oft darf die Strategie verschwinden, dann gilt das Angeln als beendet
+local MAX_TRIES     = 3;      -- Versuche, die Strategie vorzubereiten ("-mount", "-master fishing")
 local STOP_WAIT     = 24;     -- so lange auf die Rueckname der Strategie warten, bevor ausgeschaltet wird
 local STOP_REPROBE  = 3.0;    -- Abstand, in dem die Rueckname wiederholt wird, solange keine Antwort kommt
 local RESUME_WAIT   = 14;     -- Aufraeumen nach dem Anmelden: so lange auf den Bot warten (er hoert evtl. erst nach ~10 s zu)
 local RESUME_TRIES  = 5;      -- so viele Anmeldungen lang wird ein unbeantwortetes Aufraeumen wiederholt
 local DEAF_WINDOW   = 12.5;   -- ein frisch eingeschalteter Bot hoert etwa so lange nicht zu
 local ECHO_WINDOW   = 30;     -- so lange gelten eigene Fluesterbefehle als "eigene" (Echo ausblenden)
+local AFK_REPLY_WINDOW = 2;   -- so kurz nach einem eigenen Fluestern gilt "<Name> ... AFK" als dessen Antwort
 local TRACE_MAX     = 40;
+
+-- Die Schleife (je Wurf: Befehle senden -> Kanalisierung beginnt -> Fisch -> Pause).
+local LOOP_START_DELAY = 0.5;  -- Pause zwischen Bestaetigung und erstem Wurf
+local LOOP_CAST_WAIT   = 5.0;  -- so lange auf den Beginn der Kanalisierung warten (der Bot steht erst auf, ...)
+local LOOP_MOVE_MAX    = 30;   -- so lange darf der Bot zum Ufer laufen, bevor es als Fehlversuch zaehlt
+local LOOP_RETRY_PAUSE = 3.0;  -- Pause nach einem Fehlversuch
+local LOOP_MAX_FAILS   = 5;    -- Fehlversuche in Folge, dann gilt: der Bot angelt nicht
+local LOOP_REAP_WAIT   = 0.5;  -- nach dem Ende der Kanalisierung auf den Fang warten
+local LOOP_PAUSE       = 0.5;  -- Pause zwischen zwei Wuerfen
+local LURE_WAIT        = 8.0;  -- das Auftragen dauert 5 s; so lange auf den neuen Koeder warten
+local LURE_THRESHOLD   = 30;   -- ab so vielen Restsekunden gilt der Koeder als "nicht aufgetragen"
 
 local UPDATE_INTERVAL = 0.5;      -- Panel-Refresh
 local WATCHDOG_INTERVAL = 2.0;    -- Ueberwachung
@@ -96,7 +119,6 @@ local PANEL_MINWIDTH = 210;
 local running = false;
 local startedAt = 0;
 local pausedReason = nil;
-local lastFishAt = 0;
 local lastWatchdogAt = 0;
 local lastPanelAt = 0;
 local fishCount = 0;
@@ -113,6 +135,7 @@ local session = nil;          -- laufende Sitzung (Start bis Stopp), siehe Start
 local stopping = nil;         -- laufende Abschaltung, siehe Stop()
 local trace = {};             -- Ringpuffer fuer "/fb auto diag"
 local recent = {};            -- eigene Fluesterbefehle: Text -> Zeit (Echos ausblenden)
+local lastOwnAt = 0;          -- wann zuletzt ein Fluesterbefehl an sich selbst ging
 local lastProbeAt = 0;
 local lastStrategies = nil;   -- letzte Strategieliste des Bots (Rohtext)
 local lastStrategiesAt = 0;
@@ -207,6 +230,7 @@ end
 -- und als "<Name> fluestert" zurueck; beide Echos filtert EchoFilter aus dem Chat.
 local function RememberOwn(text)
    local now = GetTime();
+   lastOwnAt = now;
    recent[text] = now;
    for k, t in pairs(recent) do
       if ( now - t > ECHO_WINDOW ) then
@@ -657,9 +681,35 @@ local function EchoFilter(self, event, msg, author)
    return false;
 end
 
+-- Ist der Charakter AFK (der Client setzt das nach 5 Minuten ohne Eingabe selbst), antwortet der
+-- Server auf JEDES Fluestern an ihn -- auch an sich selbst -- mit einer Systemmeldung
+-- "<Name> ist AFK: ..." (Player::Whisper: "announce afk or dnd message"). Die Schleife fluestert
+-- zweimal je Wurf. Der Wortlaut ist serverseitig uebersetzt, deshalb erkennt der Filter die Meldung
+-- nicht am Text, sondern daran, dass sie unseren Namen nennt und unmittelbar auf ein eigenes
+-- Fluestern folgt, waehrend wir AFK sind.
+local function AfkReplyFilter(self, event, msg)
+   if ( type(self) == "string" ) then
+      -- aeltere Aufrufform ohne self
+      event, msg = self, event;
+   end
+   if ( type(msg) ~= "string" or not (UnitIsAFK and UnitIsAFK("player")) ) then
+      return false;
+   end
+   if ( (GetTime() - lastOwnAt) > AFK_REPLY_WINDOW ) then
+      return false;
+   end
+   local ok, hide = pcall(FishingBuddy.GetSettingBool, "AutoFishHideEcho");
+   if ( ok and not hide ) then
+      return false;
+   end
+   local me = UnitName("player");
+   return (me and string.find(msg, me, 1, true)) and true or false;
+end
+
 if ( ChatFrame_AddMessageEventFilter ) then
    ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER", EchoFilter);
    ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER_INFORM", EchoFilter);
+   ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", AfkReplyFilter);
 end
 
 local chatEvents = CreateFrame("Frame");
@@ -739,10 +789,10 @@ end
 
 local UpdatePanel;   -- vorwaerts deklariert
 local Start, Stop;
+local LoopTick;     -- unten definiert (braucht die Koeder-Hilfen)
 
 local function ResetCounters()
    startedAt = GetTime();
-   lastFishAt = GetTime();
    fishCount = 0;
    lureWarnedAt = 0;
    bagWarnedAt = 0;
@@ -777,41 +827,7 @@ local function IsStarting()
    return (running and session and not session.confirmed) and true or false;
 end
 
--- Die Strategie ans Bot schicken -- als EIN Befehl. Der Bot antwortet mit der Liste
--- nach der Aenderung (Pruefung); ist seine Liste noch unbekannt (Kaltstart), steht
--- eine Abfrage davor, damit sich merken laesst, ob "mount" vorher da war.
-local function Apply(s)
-   if ( TripActive() ) then
-      -- AutoTravel bewegt den Charakter und setzt eigene Strategien: spaeter
-      Trace("apply deferred: a trip is running");
-      s.step = "settle";
-      s.due = GetTime() + 5;
-      return;
-   end
-   local set = s.strategies;
-   local extra = {};
-   if ( FishingBuddy.GetSettingBool("AutoFishNoMount") and (not set or set["mount"]) ) then
-      -- Ein Selbstbot mit Reittier steigt von selbst auf, und im Sattel laesst sich
-      -- nicht angeln. Kommt "mount" nach einem fremden "nc !" zurueck, wird es erneut
-      -- entfernt.
-      extra[1] = "-mount";
-      s.mountSent = true;
-   end
-   s.leadSent = (set == nil);
-   s.replies = 0;
-   if ( not s.applied and s.carry ~= nil ) then
-      -- Die Hinterlassenschaft der letzten Sitzung (fehlendes "mount") ist ab jetzt
-      -- Sache dieses Laufs: sein Stopp stellt sie wieder her.
-      FishingBuddy.SetSetting("AutoFishPending", nil);
-   end
-   s.applied = true;
-   local block = s.confirmed and GetBlock("AutoFishKeepAliveCommands", DEFAULT_KEEP)
-                             or GetBlock("AutoFishStartCommands", DEFAULT_START);
-   SendBlock(block, extra, s.leadSent, true, s.retry);
-   s.step = "apply";
-   s.due = GetTime() + (set and WARM_WAIT or COLD_WAIT);
-end
-
+-- Die Strategie ist bestaetigt (oder war nicht noetig): die Schleife beginnt
 local function Confirm(s, unverified)
    local now = GetTime();
    local first = not s.confirmed;
@@ -820,13 +836,13 @@ local function Confirm(s, unverified)
    s.step = "run";
    s.due = nil;
    s.tries = 0;
-   s.lastCheck = now;
    if ( not first ) then
-      Trace("strategy confirmed again");
+      Trace("preparation confirmed again");
       UpdatePanel(true);
       return;
    end
-   lastFishAt = now;
+   s.loop = { phase = "ready", due = now + LOOP_START_DELAY, fails = 0, casts = 0, caught = false, sentAt = 0 };
+   Trace("loop: start");
    if ( unverified ) then
       Warn(FBConstants.AUTO_UNVERIFIED);
    else
@@ -852,7 +868,8 @@ local function Confirm(s, unverified)
    UpdatePanel(true);
 end
 
--- Die Strategie ist nach einer Antwort nicht da: erneut versuchen oder aufgeben
+-- Die Strategieliste ist nach einer Antwort nicht so, wie sie sein soll: erneut versuchen
+-- oder aufgeben
 local function Missing(s)
    s.retry = true;
    s.tries = s.tries + 1;
@@ -873,7 +890,64 @@ local function ToggleOn(s)
    SendChatMessage(".playerbots bot self", "SAY");
 end
 
--- Antwort auf eine Anwendung der Strategie (Schritt "apply")
+-- Ist die Liste der Strategien so, wie die Schleife sie braucht? Das Reittier ("mount") darf
+-- nicht steigen, und "master fishing" (alte Betriebsart) darf nicht dazwischenfunken.
+local function Wanted(s, set)
+   if ( s.mountSent and set["mount"] ) then
+      return false;
+   end
+   if ( s.fishSent and set["master fishing"] ) then
+      return false;
+   end
+   return true;
+end
+
+-- Vorbereitung vor der Schleife -- als EIN Befehl, und nur wenn etwas zu tun ist: "mount"
+-- abschalten (ein Selbstbot mit Reittier steigt von selbst auf) und eine uebrig gebliebene
+-- Strategie "master fishing" entfernen. Der Bot antwortet mit der Liste nach der Aenderung
+-- (Pruefung); ist seine Liste noch unbekannt (Kaltstart), steht eine Abfrage davor, damit
+-- sich merken laesst, ob "mount" vorher da war. Ist nichts zu tun, geht es ohne Befehl los.
+local function Apply(s)
+   if ( TripActive() ) then
+      -- AutoTravel bewegt den Charakter und setzt eigene Strategien: spaeter
+      Trace("apply deferred: a trip is running");
+      s.step = "settle";
+      s.due = GetTime() + 5;
+      return;
+   end
+   local set = s.strategies;
+   local extra = {};
+   if ( FishingBuddy.GetSettingBool("AutoFishNoMount") and (not set or set["mount"]) ) then
+      -- Im Sattel laesst sich nicht angeln. Kommt "mount" nach einem fremden "nc !"
+      -- zurueck, wird es beim naechsten Start erneut entfernt.
+      extra[#extra + 1] = "-mount";
+      s.mountSent = true;
+   end
+   if ( not set or set["master fishing"] ) then
+      -- Die Strategie angelt auf eigene Faust und liefe der Schleife dazwischen.
+      extra[#extra + 1] = "-master fishing";
+      s.fishSent = true;
+   end
+   if ( not s.applied and s.carry ~= nil ) then
+      -- Die Hinterlassenschaft der letzten Sitzung (fehlendes "mount") ist ab jetzt
+      -- Sache dieses Laufs: sein Stopp stellt sie wieder her.
+      FishingBuddy.SetSetting("AutoFishPending", nil);
+   end
+   s.applied = true;
+   s.replies = 0;
+   if ( #extra == 0 ) then
+      Trace("apply: nothing to prepare");
+      s.leadSent = false;
+      Confirm(s);
+      return;
+   end
+   s.leadSent = (set == nil);
+   SendBlock("", extra, s.leadSent, true, s.retry);
+   s.step = "apply";
+   s.due = GetTime() + (set and WARM_WAIT or COLD_WAIT);
+end
+
+-- Antwort auf die Vorbereitung (Schritt "apply")
 local function ApplyReply(s, set)
    s.replies = s.replies + 1;
    if ( s.leadSent and s.replies == 1 and s.hadMount == nil ) then
@@ -881,44 +955,10 @@ local function ApplyReply(s, set)
       s.hadMount = (set["mount"] or s.carry) and true or false;
    end
    s.strategies = set;
-   if ( set["master fishing"] and not (s.mountSent and set["mount"]) ) then
+   if ( Wanted(s, set) ) then
       Confirm(s);
    end
    -- sonst auf die naechste Antwort (die Liste nach der Aenderung) oder die Frist warten
-end
-
--- Ergebnis der regelmaessigen Kontrolle im Betrieb
-local function HealthResult(s, set)
-   s.strategies = set;
-   s.step = "run";
-   s.due = nil;
-   local mountBack = FishingBuddy.GetSettingBool("AutoFishNoMount") and set["mount"];
-   if ( set["master fishing"] and not mountBack ) then
-      s.present = (s.present or 0) + 1;
-      if ( s.present >= 3 ) then
-         s.vanish = 0;
-      end
-      return;
-   end
-   s.present = 0;
-   s.retry = false;
-   if ( not set["master fishing"] ) then
-      s.vanish = s.vanish + 1;
-      Trace("health: master fishing missing ("..s.vanish..")");
-      if ( s.vanish >= MAX_VANISH ) then
-         -- Der Bot nimmt die Strategie selbst zurueck ("end master fishing"), wenn
-         -- im Umkreis kein Wasser liegt.
-         Stop(nil, FBConstants.AUTO_REASON_ENDED);
-         return;
-      end
-      if ( FishingBuddy.GetSettingBool("AutoFishVerbose") ) then
-         Say(FBConstants.AUTO_KEEPALIVE);
-      end
-   else
-      -- "mount" ist zurueck (fremdes "nc !"): erneut entfernen
-      Trace("health: mount is back");
-   end
-   Apply(s);
 end
 
 -- Wird von den Chatereignissen aufgerufen
@@ -1019,14 +1059,11 @@ SessionEvent = function(kind, arg)
          s.due = now;
       elseif ( step == "apply" ) then
          ApplyReply(s, arg);
-      elseif ( step == "check" ) then
-         HealthResult(s, arg);
-      elseif ( s.applied and arg["master fishing"] ) then
-         -- eine verspaetete Antwort auf die Anwendung: zaehlt als Beweis
+      elseif ( s.applied and not s.confirmed and step == "settle" and (s.mountSent or s.fishSent)
+               and Wanted(s, arg) ) then
+         -- eine verspaetete Antwort auf die Vorbereitung: zaehlt als Beweis
          s.strategies = arg;
-         if ( not s.confirmed and step == "settle" and not (s.mountSent and arg["mount"]) ) then
-            Confirm(s);
-         end
+         Confirm(s);
       else
          s.strategies = arg;
       end
@@ -1062,7 +1099,7 @@ local function SessionTick(now)
       Apply(s);
    elseif ( step == "apply" ) then
       local known = s.strategies;
-      if ( s.replies == 0 and known and known["master fishing"] and not (s.mountSent and known["mount"]) ) then
+      if ( s.replies == 0 and known and Wanted(s, known) ) then
          -- Die Liste war schon so, wie sie sein soll; die Antwort auf den Befehl ist
          -- ausgeblieben, weil der Server einen gleichlautenden Text nicht wiederholt.
          Trace("apply: list was already as wanted, the reply was suppressed");
@@ -1074,9 +1111,6 @@ local function SessionTick(now)
          -- von sich selbst, oder die Antwort wurde unterdrueckt). Nicht aufgeben.
          Confirm(s, true);
       end
-   elseif ( step == "check" ) then
-      s.step = "run";       -- keine Antwort: unklar, nichts unternehmen
-      s.due = nil;
    end
 end
 
@@ -1168,6 +1202,7 @@ driver:SetScript("OnUpdate", function()
       local now = GetTime();
       SessionTick(now);
       StopTick(now);
+      LoopTick(now);
    end
 end);
 
@@ -1188,7 +1223,14 @@ local function BeginShutdown(s, quick)
    -- "mount" zurueckgeben: wenn dieser Lauf es entfernt hat, oder wenn die letzte
    -- Sitzung es entfernt und nicht mehr zurueckgegeben hat (s.carry)
    local restore = ((s.mountSent and s.hadMount ~= false) or s.carry) and true or false;
-   if ( s.applied and selfState ~= false ) then
+   -- Die Schleife setzt keine Strategie, die zurueckzunehmen waere. Der Befehlsblock "Beim
+   -- Stoppen" wird nur gesendet, wenn "mount" zurueckzugeben ist, der Block geaendert wurde
+   -- (dann will jemand, dass er laeuft) oder beim Abmelden / /reload (das Aufraeumen und das
+   -- Ausschalten des Bots holt die naechste Anmeldung nach); sonst entfaellt das Warten auf
+   -- den Bot.
+   local custom = NormalizeBlock(GetBlockRaw("AutoFishStopCommands", DEFAULT_STOP)) ~= NormalizeBlock(DEFAULT_STOP);
+   local cleanup = restore or custom or quick;
+   if ( s.applied and cleanup and selfState ~= false ) then
       local sent = 0;
       local function remove(trail)
          sent = sent + 1;
@@ -1207,8 +1249,6 @@ local function BeginShutdown(s, quick)
       local skip = 0;
       if ( s.step == "apply" ) then
          skip = math.max(0, (s.leadSent and 2 or 1) - (s.replies or 0));
-      elseif ( s.step == "check" ) then
-         skip = 1;
       end
       remove(true);
       stopping = {
@@ -1218,7 +1258,7 @@ local function BeginShutdown(s, quick)
       };
       return;
    end
-   if ( s.applied ) then
+   if ( s.applied and cleanup ) then
       -- Der Bot wurde von aussen ausgeschaltet, bevor die Strategie zurueckgenommen
       -- war: sie kann noch gespeichert sein. Das Aufraeumen holt die naechste
       -- Einschaltmeldung oder Anmeldung nach.
@@ -1277,10 +1317,10 @@ Start = function(silent)
    end
    session = {
       step = "probe", due = GetTime() + ProbeWait(),
-      tries = 0, vanish = 0, present = 0, lastCheck = 0, replies = 0,
+      tries = 0, replies = 0,
       ownsBot = false, retoggled = false, toggleSent = false, sawReply = false,
       sawOn = false, reprobed = false, confirmed = false, applied = false,
-      mountSent = false, hadMount = nil, strategies = nil, leadSent = false,
+      mountSent = false, fishSent = false, hadMount = nil, strategies = nil, leadSent = false,
       retry = false, toggleAnswered = false, mayDup = ((GetTime() - lastStrategiesAt) < 3),
       carry = carry,
    };
@@ -1357,6 +1397,9 @@ function Auto.GetState()
       ownsBot = (session and session.ownsBot) or (stopping and stopping.ownsBot) or false,
       strategies = lastStrategies,
       holdingBotpad = botpadHeld,
+      loop = session and session.loop and session.loop.phase or nil,
+      casts = session and session.loop and session.loop.casts or 0,
+      fails = session and session.loop and session.loop.fails or 0,
    };
 end
 
@@ -1400,46 +1443,181 @@ local function LureTokens(lure)
    };
 end
 
--- Koeder-Behandlung: erst versuchen, den Bot den Koeder auftragen zu lassen,
--- sonst warnen und den Schnellbutton hervorheben.
-local function HandleLure(now)
-   local left = LureSecondsLeft();
-   local threshold = 30;
-   local lure = FishingBuddy.API.GetBestLure and FishingBuddy.API.GetBestLure();
+-- ---------------------------------------------------------------------------
+-- Die Schleife
+-- ---------------------------------------------------------------------------
+--
+-- Je Wurf durchlaeuft sie diese Phasen (session.loop.phase):
+--   ready  Voraussetzungen pruefen; Koeder faellig -> "lure", sonst Befehle senden -> "cast"
+--   lure   auf den neuen Koeder warten (Auftragen dauert 5 s)            -> "pause"
+--   cast   auf den Beginn der Kanalisierung warten (der Bot wirft aus)   -> "fish" / Fehlversuch
+--   fish   der Charakter kanalisiert ("Angeln"): auf Biss und Schwimmer  -> "reap" / "pause"
+--   reap   Kanalisierung vorbei: kurz auf den Fang (Ereignis) warten     -> "pause"
+--   pause  kurze Pause zwischen zwei Wuerfen                             -> "ready"
 
-   lureNeeded = (left <= threshold) and (lure ~= nil);
+local function IsChanneling()
+   return (UnitChannelInfo and UnitChannelInfo("player")) and true or false;
+end
 
-   if ( not lureNeeded ) then
-      -- Koeder sitzt wieder: Versuchszaehler zuruecksetzen
-      if ( left > threshold ) then
-         lureTries = 0;
-         lureGaveUp = false;
-      end
+local function IsCasting()
+   return (UnitCastingInfo and UnitCastingInfo("player")) and true or false;
+end
+
+local function IsMoving()
+   return (GetUnitSpeed and (GetUnitSpeed("player") or 0) > 0) and true or false;
+end
+
+local function LoopPhase(loop, phase, due)
+   if ( loop.phase ~= phase ) then
+      Trace("loop: "..phase);
+   end
+   loop.phase = phase;
+   loop.due = due;
+end
+
+-- Der Koeder, der aufzutragen ist (nil: keiner noetig oder keiner verfuegbar)
+local function LureToApply()
+   if ( not FishingBuddy.GetSettingBool("AutoFishAutoLure") or lureGaveUp ) then
+      return nil;
+   end
+   if ( LureSecondsLeft() > LURE_THRESHOLD ) then
+      return nil;
+   end
+   return FishingBuddy.API.GetBestLure and FishingBuddy.API.GetBestLure() or nil;
+end
+
+-- Die Befehle eines Wurfs senden
+local function LoopSend(loop, now)
+   -- SendBlock: "nc"-Zeilen eines eigenen Blocks werden zu EINEM Befehl zusammengefasst (der
+   -- Bot behaelt je Takt nur den letzten), alle anderen Zeilen gehen wie geschrieben hinaus.
+   SendBlock(GetBlock("AutoFishLoopCommands", DEFAULT_LOOP));
+   loop.sentAt = now;
+   loop.caught = false;
+   LoopPhase(loop, "cast", now + LOOP_CAST_WAIT);
+end
+
+LoopTick = function(now)
+   local s = session;
+   if ( not s or not s.confirmed or s.step ~= "run" or not s.loop ) then
       return;
    end
+   local loop = s.loop;
+   local phase = loop.phase;
+   local channeling = IsChanneling();
 
-   -- a) Automatisch ueber den Bot auftragen lassen
-   if ( FishingBuddy.GetSettingBool("AutoFishAutoLure") and not lureGaveUp ) then
-      if ( session and not session.confirmed ) then
-         return;          -- der Bot ist noch nicht soweit: ein Versuch ginge ins Leere
+   if ( phase == "fish" ) then
+      if ( not channeling ) then
+         if ( loop.caught ) then
+            LoopPhase(loop, "pause", now + LOOP_PAUSE);
+         else
+            LoopPhase(loop, "reap", now + LOOP_REAP_WAIT);
+         end
       end
-      local retry = FishingBuddy.GetSetting("AutoFishLureRetry") or 20;
-      if ( (now - lureTriedAt) >= retry ) then
+
+   elseif ( phase == "reap" ) then
+      if ( channeling ) then
+         LoopPhase(loop, "fish", now);                 -- schon wieder ausgeworfen (von Hand)
+      elseif ( loop.caught or now >= loop.due ) then
+         LoopPhase(loop, "pause", now + LOOP_PAUSE);
+      end
+
+   elseif ( phase == "cast" ) then
+      if ( channeling ) then
+         loop.fails = 0;
+         loop.casts = loop.casts + 1;
+         LoopPhase(loop, "fish", now);
+      elseif ( now >= loop.due ) then
+         if ( IsMoving() and (now - loop.sentAt) < LOOP_MOVE_MAX ) then
+            -- Der Bot laeuft zum Ufer ("do move near water"): abwarten; danach erneut senden.
+            loop.due = now + 1;
+         else
+            loop.fails = loop.fails + 1;
+            Trace("loop: no cast after "..string.format("%.0f", now - loop.sentAt).." s (try "..loop.fails..")");
+            if ( loop.fails >= LOOP_MAX_FAILS ) then
+               Fail(FBConstants.AUTO_ERR_LOOP);
+               return;
+            end
+            LoopPhase(loop, "pause", now + LOOP_RETRY_PAUSE);
+         end
+      end
+
+   elseif ( phase == "lure" ) then
+      if ( LureSecondsLeft() > LURE_THRESHOLD ) then
+         lureTries = 0;                                 -- der Koeder sitzt
+         LoopPhase(loop, "pause", now + LOOP_PAUSE);
+      elseif ( now >= loop.due ) then
+         if ( lureTries >= 3 ) then
+            -- Nach mehreren erfolglosen Versuchen aufgeben (der Server unterstuetzt den
+            -- Befehl offenbar nicht): ohne Koeder weiterangeln, der Hinweis bleibt.
+            lureGaveUp = true;
+            Warn(FBConstants.AUTO_LUREFAILED);
+            PlayAlert();
+         end
+         LoopPhase(loop, "pause", now + LOOP_PAUSE);
+      end
+
+   elseif ( phase == "pause" ) then
+      if ( now >= loop.due ) then
+         LoopPhase(loop, "ready", now);
+      end
+
+   elseif ( phase == "ready" ) then
+      if ( now < loop.due ) then
+         return;
+      end
+      if ( TripActive() ) then
+         loop.due = now + 5;                            -- AutoTravel bewegt den Charakter
+         return;
+      end
+      if ( IsMounted and IsMounted() ) then
+         loop.due = now + 2;                            -- im Sattel laesst sich nicht angeln
+         return;
+      end
+      if ( channeling ) then
+         LoopPhase(loop, "fish", now);                  -- es wird schon geangelt
+         return;
+      end
+      if ( IsCasting() ) then
+         loop.due = now + 0.5;                          -- ein anderer Zauber laeuft noch
+         return;
+      end
+      -- 1) Koeder verfuegbar, aber nicht aufgetragen: auftragen lassen
+      local lure = LureToApply();
+      if ( lure ) then
          lureTriedAt = now;
          lureTries = lureTries + 1;
          ExecuteBlock(GetBlock("AutoFishLureCommands", DEFAULT_LURE), LureTokens(lure));
          if ( FishingBuddy.GetSettingBool("AutoFishVerbose") ) then
             Say(string.format(FBConstants.AUTO_LURETRY, lure.n));
          end
-         -- Nach mehreren erfolglosen Versuchen aufgeben: der Server
-         -- unterstuetzt den Befehl offenbar nicht.
-         if ( lureTries >= 3 ) then
-            lureGaveUp = true;
-            Warn(FBConstants.AUTO_LUREFAILED);
-            PlayAlert();
-         end
+         LoopPhase(loop, "lure", now + LURE_WAIT);
          return;
       end
+      -- 2) + 3) Angelplatz setzen und auswerfen
+      LoopSend(loop, now);
+   end
+end
+
+-- Koeder-Behandlung im Betrieb. Das Auftragen selbst gehoert zur Schleife (siehe LoopTick: vor
+-- dem naechsten Wurf, nie mitten im Angeln). Hier bleibt der Hinweis, wenn der Bot es nicht
+-- tut oder die Funktion ausgeschaltet ist, und die Anzeige fuer den Schnellbutton.
+local function HandleLure(now)
+   local left = LureSecondsLeft();
+   local lure = FishingBuddy.API.GetBestLure and FishingBuddy.API.GetBestLure();
+
+   lureNeeded = (left <= LURE_THRESHOLD) and (lure ~= nil);
+
+   if ( not lureNeeded ) then
+      -- Koeder sitzt wieder: Versuchszaehler zuruecksetzen
+      if ( left > LURE_THRESHOLD ) then
+         lureTries = 0;
+         lureGaveUp = false;
+      end
+      return;
+   end
+
+   -- a) Die Schleife traegt den Koeder auf, solange das erlaubt ist und es noch klappt
+   if ( FishingBuddy.GetSettingBool("AutoFishAutoLure") and not lureGaveUp ) then
       return;
    end
 
@@ -1504,20 +1682,7 @@ local function RunWatchdog()
    -- 6) Koeder abgelaufen
    HandleLure(now);
 
-   -- 7) Stillstand: pruefen, ob der Bot noch angelt, und die Strategie bei Bedarf
-   --    erneut setzen. Nicht blind senden -- der Bot antwortet auf "nc ?" mit
-   --    seiner Strategieliste.
-   if ( session and session.step == "run" and FishingBuddy.GetSettingBool("AutoFishKeepAlive") ) then
-      local idle = FishingBuddy.GetSetting("AutoFishIdleSeconds") or 45;
-      if ( (now - lastFishAt) > idle and (now - session.lastCheck) > idle and not TripActive() ) then
-         session.lastCheck = now;
-         session.step = "check";
-         session.due = now + CHECK_WAIT;
-         SendProbe();
-      end
-   end
-
-   -- 8) Im Sattel kann der Bot nicht angeln
+   -- 7) Im Sattel kann der Bot nicht angeln
    if ( session and session.step == "run" and IsMounted and IsMounted() and (now - mountWarnedAt) > 60 ) then
       mountWarnedAt = now;
       Warn(FBConstants.AUTO_WARN_MOUNTED);
@@ -1838,8 +2003,7 @@ local function ShowEditor()
       hint:SetText(FBConstants.AUTO_EDITOR_HINT);
 
       local boxes = {
-         { setting = "AutoFishStartCommands", label = FBConstants.AUTO_EDITOR_START, default = DEFAULT_START },
-         { setting = "AutoFishKeepAliveCommands", label = FBConstants.AUTO_EDITOR_KEEP, default = DEFAULT_KEEP },
+         { setting = "AutoFishLoopCommands", label = FBConstants.AUTO_EDITOR_LOOP, default = DEFAULT_LOOP },
          { setting = "AutoFishStopCommands", label = FBConstants.AUTO_EDITOR_STOP, default = DEFAULT_STOP },
          { setting = "AutoFishLureCommands", label = FBConstants.AUTO_EDITOR_LURE, default = DEFAULT_LURE },
       };
@@ -1926,10 +2090,6 @@ local AutoOptions = {
       ["tooltip"] = FBConstants.CONFIG_AUTOPANELPOLE_INFO,
       ["v"] = 1, ["m"] = 1, ["default"] = 1,
       ["deps"] = { ["AutoFishPanelVisible"] = "d" } },
-   ["AutoFishKeepAlive"] = {
-      ["text"] = FBConstants.CONFIG_AUTOKEEPALIVE_ONOFF,
-      ["tooltip"] = FBConstants.CONFIG_AUTOKEEPALIVE_INFO,
-      ["v"] = 1, ["m"] = 1, ["default"] = 1 },
    ["AutoFishNoMount"] = {
       ["text"] = FBConstants.CONFIG_AUTONOMOUNT_ONOFF,
       ["tooltip"] = FBConstants.CONFIG_AUTONOMOUNT_INFO,
@@ -1962,11 +2122,6 @@ local AutoOptions = {
       ["text"] = FBConstants.CONFIG_AUTOVERBOSE_ONOFF,
       ["tooltip"] = FBConstants.CONFIG_AUTOVERBOSE_INFO,
       ["v"] = 1, ["m"] = 1, ["default"] = 0 },
-   ["AutoFishIdleSlider"] = {
-      ["tooltip"] = FBConstants.CONFIG_AUTOIDLE_INFO,
-      ["button"] = "FishingBuddyOption_AutoFishIdleSlider",
-      ["deps"] = { ["AutoFishKeepAlive"] = "d" },
-      ["margin"] = { 12, 8 }, },
    ["AutoFishMaxSlider"] = {
       ["tooltip"] = FBConstants.CONFIG_AUTOMAX_INFO,
       ["button"] = "FishingBuddyOption_AutoFishMaxSlider",
@@ -1978,14 +2133,11 @@ local AutoOptions = {
 };
 
 local InvisibleOptions = {
-   ["AutoFishStartCommands"] = { ["default"] = DEFAULT_START },
-   ["AutoFishKeepAliveCommands"] = { ["default"] = DEFAULT_KEEP },
+   ["AutoFishLoopCommands"] = { ["default"] = DEFAULT_LOOP },
    ["AutoFishStopCommands"] = { ["default"] = DEFAULT_STOP },
-   ["AutoFishIdleSeconds"] = { ["default"] = 45 },
    ["AutoFishMaxMinutes"] = { ["default"] = 0 },
    ["AutoFishBagLimit"] = { ["default"] = 2 },
    ["AutoFishLureCommands"] = { ["default"] = DEFAULT_LURE },
-   ["AutoFishLureRetry"] = { ["default"] = 20 },
    ["AutoFishPanelPosition"] = { ["default"] = nil },
    ["AutoFishPending"] = { ["default"] = nil },
 };
@@ -2014,8 +2166,6 @@ local function BuildOptionWidgets()
       return s;
    end
 
-   MakeSlider("AutoFishIdleSlider", "AutoFishIdleSeconds", 15, 180,
-              FBConstants.AUTO_IDLELABEL.." - %d s", 5);
    MakeSlider("AutoFishMaxSlider", "AutoFishMaxMinutes", 0, 240,
               FBConstants.AUTO_MAXLABEL.." - %d min", 5);
 
@@ -2050,6 +2200,9 @@ local function PrintDiagnosis()
    Say(string.format(FBConstants.AUTO_DIAG_STATE,
                      st.running and FBConstants.AUTO_ONWORD or FBConstants.AUTO_OFFWORD,
                      st.step, sf, YesNo(st.ownsBot)));
+   if ( st.loop ) then
+      Say(string.format(FBConstants.AUTO_DIAG_LOOP, st.loop, st.casts, st.fails));
+   end
    if ( lastStrategies ) then
       Say(string.format(FBConstants.AUTO_DIAG_STRATEGIES, math.floor(now - lastStrategiesAt), lastStrategies));
    else
@@ -2125,13 +2278,11 @@ FishingBuddy.Commands[FBConstants.AUTO].func =
 local AutoEvents = {};
 
 AutoEvents[FBConstants.ADD_FISHIE_EVT] = function(id, name, zone, subzone, texture, quantity)
-   lastFishAt = GetTime();
    if ( running ) then
       fishCount = fishCount + (quantity or 1);
-      if ( session ) then
-         -- ein Fang beweist, dass die Strategie wirkt
-         session.vanish = 0;
-         session.present = 0;
+      if ( session and session.loop ) then
+         -- der Fisch ist gefangen: die Schleife darf den naechsten Wurf vorbereiten
+         session.loop.caught = true;
       end
    end
 end;

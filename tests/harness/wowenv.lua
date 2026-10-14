@@ -1040,7 +1040,9 @@ function Env:build_env()
    G.UnitIsDeadOrGhost = function() return W.dead and 1 or nil end
    G.UnitAffectingCombat = function() return W.combat and 1 or nil end
    G.InCombatLockdown = function() return W.combat and 1 or nil end
-   G.UnitCastingInfo = function() return nil end
+   G.UnitCastingInfo = function() if W.casting then return "Apply" end return nil end
+   G.GetUnitSpeed = function() return W.speed or 0 end        -- 0 = standing still
+   G.UnitIsAFK = function() return W.afk and 1 or nil end     -- the client sets AFK itself after 5 min without input
    G.UnitChannelInfo = function() if W.channeling then return "Fishing" end return nil end
    G.geterrorhandler = G.geterrorhandler or function() return function(err) env:record_error("errorhandler", err, nil) end end
    G.UnitBuff = function() return nil end
