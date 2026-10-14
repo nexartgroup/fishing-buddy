@@ -31,7 +31,7 @@ FishingTranslations["deDE"] = {
    SILVER_COIN = "Silberm\195\188nze",
    COPPER_COIN = "Kupferm\195\188nze",
    
-   LAGER = "KapitŠn Rumseys Lagerbier",
+   LAGER = "Kapit\195\164n Rumseys Lagerbier",
 
    -- Thanks Maischter!
    SCHOOL = "schwarm",  -- e.g. '\195\150lige Schwarzmaul Schwarm'
@@ -207,7 +207,7 @@ FishingTranslations["deDE"].AUTO_STARTED = "Auto-Angeln gestartet.";
 FishingTranslations["deDE"].AUTO_STOPPED = "Auto-Angeln beendet.";
 FishingTranslations["deDE"].AUTO_SUMMARY = "Laufzeit %s, %d F\195\164nge.";
 FishingTranslations["deDE"].AUTO_NEEDPOLE = "Du musst zuerst eine Angel anlegen.";
-FishingTranslations["deDE"].AUTO_KEEPALIVE = "L\195\164ngere Zeit kein Fang - Bot-Befehle werden erneut gesendet.";
+FishingTranslations["deDE"].AUTO_KEEPALIVE = "L\195\164ngere Zeit kein Fang und der Bot hat die Strategie verloren - sie wird erneut gesetzt.";
 FishingTranslations["deDE"].AUTO_BAGSLOW = "Nur noch %d freie Taschenpl\195\164tze!";
 FishingTranslations["deDE"].AUTO_LUREGONE = "Dein K\195\182der ist abgelaufen - %s liegt in deinen Taschen bereit.";
 FishingTranslations["deDE"].AUTO_LURESOON = "K\195\182der l\195\164uft in %d Sekunden ab - %s liegt in deinen Taschen bereit.";
@@ -226,9 +226,9 @@ FishingTranslations["deDE"].AUTO_TIP_STOP = "Linksklick: Auto-Angeln stoppen";
 FishingTranslations["deDE"].AUTO_TIP_RIGHT = "Rechtsklick: Einstellungen \195\182ffnen";
 FishingTranslations["deDE"].AUTO_TIP_DRAG = "Panel mit der Maus verschieben.";
 FishingTranslations["deDE"].AUTO_EDITOR_TITLE = "Playerbot-Befehle";
-FishingTranslations["deDE"].AUTO_EDITOR_HINT = "Ein Befehl pro Zeile. Zeilen mit f\195\188hrendem Punkt gehen als Server-Befehl raus, Zeilen mit Schr\195\164gstrich als Chat-Befehl. %p = eigener Name, %z = Zone, %s = Unterzone.";
+FishingTranslations["deDE"].AUTO_EDITOR_HINT = "Ein Befehl pro Zeile. '/w %p ...' erreicht deinen eigenen Selbstbot; mehrere 'nc'-Zeilen werden zu einem Befehl zusammengefasst. Ein Punkt am Anfang sendet einen Server-Befehl. Den Umschalter des Selbstbots erledigt das AddOn. %p = Name, %z = Zone, %s = Unterzone. Einzelheiten: README.";
 FishingTranslations["deDE"].AUTO_EDITOR_START = "Beim Start:";
-FishingTranslations["deDE"].AUTO_EDITOR_KEEP = "Nachfassen (wird bei Stillstand erneut gesendet):";
+FishingTranslations["deDE"].AUTO_EDITOR_KEEP = "Neu setzen (wenn die Pr\195\188fung die Strategie vermisst):";
 FishingTranslations["deDE"].AUTO_EDITOR_STOP = "Beim Stoppen:";
 FishingTranslations["deDE"].AUTO_EDITOR_SAVE = "Speichern";
 FishingTranslations["deDE"].AUTO_EDITOR_RESET = "Standard";
@@ -240,8 +240,8 @@ FishingTranslations["deDE"].CONFIG_AUTOPANEL_ONOFF = "Auto-Angeln-Panel anzeigen
 FishingTranslations["deDE"].CONFIG_AUTOPANEL_INFO = "Zeigt das verschiebbare Panel mit dem Auto-Angeln-Schalter.";
 FishingTranslations["deDE"].CONFIG_AUTOPANELPOLE_ONOFF = "Nur mit angelegter Angel";
 FishingTranslations["deDE"].CONFIG_AUTOPANELPOLE_INFO = "Panel nur einblenden, wenn eine Angel angelegt ist.";
-FishingTranslations["deDE"].CONFIG_AUTOKEEPALIVE_ONOFF = "Befehle bei Stillstand wiederholen";
-FishingTranslations["deDE"].CONFIG_AUTOKEEPALIVE_INFO = "Sendet die Nachfass-Befehle erneut, wenn l\195\164ngere Zeit nichts gefangen wird.";
+FishingTranslations["deDE"].CONFIG_AUTOKEEPALIVE_ONOFF = "Bot bei Stillstand pr\195\188fen";
+FishingTranslations["deDE"].CONFIG_AUTOKEEPALIVE_INFO = "Fragt den Bot nach seinen Strategien, wenn l\195\164ngere Zeit nichts gefangen wird, und setzt 'master fishing' neu, falls sie fehlt.";
 FishingTranslations["deDE"].CONFIG_AUTOBAGS_ONOFF = "Bei vollen Taschen stoppen";
 FishingTranslations["deDE"].CONFIG_AUTOBAGS_INFO = "Beendet das Auto-Angeln automatisch, wenn der Platz ausgeht.";
 FishingTranslations["deDE"].CONFIG_AUTOCOMBAT_ONOFF = "Bei Kampf stoppen";
@@ -251,8 +251,8 @@ FishingTranslations["deDE"].CONFIG_AUTOLURE_INFO = "Gibt eine Warnung aus, kurz 
 FishingTranslations["deDE"].CONFIG_AUTOSOUND_ONOFF = "Signalton bei Meldungen";
 FishingTranslations["deDE"].CONFIG_AUTOSOUND_INFO = "Spielt einen Ton beim Starten, Stoppen und bei Warnungen.";
 FishingTranslations["deDE"].CONFIG_AUTOVERBOSE_ONOFF = "Ausf\195\188hrliche Meldungen";
-FishingTranslations["deDE"].CONFIG_AUTOVERBOSE_INFO = "Meldet auch die Nachfass-Befehle im Chatfenster.";
-FishingTranslations["deDE"].CONFIG_AUTOIDLE_INFO = "Wie lange ohne Fang gewartet wird, bevor die Befehle erneut gesendet werden.";
+FishingTranslations["deDE"].CONFIG_AUTOVERBOSE_INFO = "Meldet auch, wenn der Bot seine Strategie verloren hat und wenn er einen K\195\182der auftragen soll.";
+FishingTranslations["deDE"].CONFIG_AUTOIDLE_INFO = "Wie lange ohne Fang gewartet wird, bevor der Bot gepr\195\188ft wird.";
 FishingTranslations["deDE"].CONFIG_AUTOMAX_INFO = "Automatisch nach so vielen Minuten stoppen (0 = kein Limit).";
 FishingTranslations["deDE"].CONFIG_AUTOEDITOR_INFO = "\195\150ffnet den Editor f\195\188r die Playerbot-Befehle.";
 FishingTranslations["deDE"].STATS_TITLE = "Sitzungs-Statistik";
@@ -287,9 +287,10 @@ FishingTranslations["deDE"].BINDING_NAME_FISHINGBUDDY_AUTOFISH = "Auto-Angeln um
 FishingTranslations["deDE"].BINDING_NAME_FISHINGBUDDY_AUTOPANEL = "Auto-Angeln-Panel umschalten";
 
 FishingTranslations["deDE"].AUTO_HELP = {
-      "|c#GREEN#/fb #AUTO#|r [|c#GREEN#on|r | |c#GREEN#off|r | |c#GREEN#lure|r | |c#GREEN#edit|r | |c#GREEN#panel|r | |c#GREEN#status|r]",
+      "|c#GREEN#/fb #AUTO#|r [|c#GREEN#on|r | |c#GREEN#off|r | |c#GREEN#lure|r | |c#GREEN#edit|r | |c#GREEN#panel|r | |c#GREEN#status|r | |c#GREEN#diag|r | |c#GREEN#probe|r]",
       "    Schaltet das Playerbot-Auto-Angeln um. |c#GREEN#edit|r oeffnet den",
-      "    Befehls-Editor, |c#GREEN#panel|r blendet das Panel ein oder aus.",
+      "    Befehls-Editor, |c#GREEN#panel|r blendet das Panel ein oder aus,",
+      "    |c#GREEN#diag|r zeigt, was der Bot gerade tut (Fehlersuche).",
 };
 FishingTranslations["deDE"].STATS_HELP = {
       "|c#GREEN#/fb #STATS#|r [|c#GREEN##RESET#|r]",
@@ -308,3 +309,40 @@ FishingTranslations["deDE"].AUTO_EDITOR_LURE = "K\195\182der auftragen (%l = Lin
 FishingTranslations["deDE"].CONFIG_AUTOAUTOLURE_ONOFF = "K\195\182der vom Bot auftragen lassen";
 FishingTranslations["deDE"].CONFIG_AUTOAUTOLURE_INFO = "Sendet beim Ablaufen des K\195\182ders den eingestellten Befehl, damit der Playerbot selbst einen neuen auftr\195\164gt.";
 FishingTranslations["deDE"].BINDING_NAME_FISHINGBUDDY_APPLYLURE = "Besten K\195\182der auftragen";
+
+-- Auto-Angeln 0.9.10: Zustandsverfolgung, Pruefung, Diagnose
+FishingTranslations["deDE"].AUTO_STATE_STOPPING = "Auto-Angeln: stoppt ...";
+FishingTranslations["deDE"].AUTO_TRIP_ACTIVE = "Eine AutoTravel-Reise l\195\164uft - starte das Auto-Angeln nach der Ankunft.";
+FishingTranslations["deDE"].AUTO_WARN_BOTPAD_OLD = "Botpad vor 1.3 im Modus 'Minimal' nimmt dem Bot die Chat-Strategie: der Bot h\195\182rt Fishing Buddy dann nicht. Aktualisiere Botpad oder w\195\164hle einen anderen Modus.";
+FishingTranslations["deDE"].AUTO_WORD_YES = "ja";
+FishingTranslations["deDE"].AUTO_WORD_NO = "nein";
+FishingTranslations["deDE"].AUTO_WORD_UNKNOWN = "unbekannt";
+FishingTranslations["deDE"].AUTO_DIAG_STATE = "Auto-Angeln: %s, Schritt %s, Selbstbot %s, von uns eingeschaltet: %s";
+FishingTranslations["deDE"].AUTO_DIAG_STRATEGIES = "Strategien des Bots (vor %d s): %s";
+FishingTranslations["deDE"].AUTO_DIAG_NOLIST = "Noch keine Strategieliste vom Bot. Ist der Selbstbot aus, ist das normal; /fb auto probe fragt erneut.";
+FishingTranslations["deDE"].AUTO_DIAG_ENV = "Angel: %s, Reittier: %s, Gruppe: %s, im Kampf: %s";
+FishingTranslations["deDE"].AUTO_DIAG_ADDONS = "Botpad: %s%s, von uns gehalten: %s, AutoTravel: %s, AutoTravel-Reise l\195\164uft: %s";
+FishingTranslations["deDE"].AUTO_DIAG_TRACE = "Letzte Meldungen (Sekunden zuvor; -> gesendet, <- empfangen):";
+FishingTranslations["deDE"].AUTO_PROBE_SENT = "Der Bot wurde nach seinen Strategien gefragt. Die Antwort (falls eine kommt) steht in /fb auto diag; keine Antwort hei\195\159t meist: der Selbstbot ist aus.";
+FishingTranslations["deDE"].AUTO_PROBE_BUSY = "Das Auto-Angeln spricht gerade mit dem Bot - gleich noch einmal versuchen.";
+FishingTranslations["deDE"].AUTO_STARTING = "Starte Auto-Angeln - der Bot wird gepr\195\188ft ...";
+FishingTranslations["deDE"].AUTO_STATE_STARTING = "Auto-Angeln: startet ...";
+FishingTranslations["deDE"].AUTO_UNVERIFIED = "Der Bot hat die Strategiepr\195\188fung nicht beantwortet, der Start ist daher unbest\195\164tigt. Wenn nichts ausgeworfen wird: /fb auto diag";
+FishingTranslations["deDE"].AUTO_STOPPING = "Der Bot wird noch gestoppt, einen Moment bitte.";
+FishingTranslations["deDE"].AUTO_DISMOUNT = "Steig zuerst ab - der Bot kann im Sattel nicht angeln.";
+FishingTranslations["deDE"].AUTO_WARN_MOUNTED = "Du sitzt auf einem Reittier - so kann der Bot nicht angeln. Steig ab; mit der Option 'Bot nicht aufsitzen lassen' steigt er nicht von selbst wieder auf.";
+FishingTranslations["deDE"].AUTO_WARN_CLASH = "Weitere Bot-Strategien sind aktiv (%s); der Bot l\195\164uft eventuell weg oder k\195\164mpft, statt zu angeln.";
+FishingTranslations["deDE"].AUTO_WARN_BOTPOLE = "Der Bot meldet, dass er keine Angel hat.";
+FishingTranslations["deDE"].AUTO_ERR_REFUSED = "Der Server verweigert den Selbstbot: %s (Servereinstellung AiPlayerbot.SelfBotLevel: 0 = aus, 1 = nur Spielleiter)";
+FishingTranslations["deDE"].AUTO_ERR_NOANSWER = "Keine Antwort auf '.playerbots bot self'. Ist mod-playerbots installiert und der Befehl f\195\188r dein Konto erlaubt?";
+FishingTranslations["deDE"].AUTO_ERR_TOGGLE = "Der Selbstbot blieb nicht eingeschaltet.";
+FishingTranslations["deDE"].AUTO_ERR_WHISPER = "Fl\195\188stern an dich selbst ist gesperrt. Spielleiter-Konten brauchen einmal '.whispers on'.";
+FishingTranslations["deDE"].AUTO_ERR_STRATEGY = "Der Bot hat die Strategie 'master fishing' nach %d Versuchen nicht \195\188bernommen. Ein anderes Addon (Botpad, AutoTravel), ein gespeicherter Strategiesatz, deine eigenen Befehlslisten (/fb auto edit) oder der Bot selbst (kein Wasser in Reichweite?) nimmt sie vielleicht zur\195\188ck - siehe /fb auto diag.";
+FishingTranslations["deDE"].AUTO_REASON_ENDED = "der Bot hat das Angeln selbst beendet - kein Wasser in Reichweite?";
+FishingTranslations["deDE"].AUTO_REASON_BOTOFF = "der Selbstbot wurde ausgeschaltet";
+FishingTranslations["deDE"].AUTO_NOTE_PARTYLINE = "'%s' geht in den Gruppenchat, aber du bist in keiner Gruppe, der Server w\195\188rde sie verwerfen. Sie geht stattdessen an deinen eigenen Bot (/w %%p ...).";
+FishingTranslations["deDE"].AUTO_NOTE_TOGGLELINE = "'.playerbots bot self' wurde aus deiner Befehlsliste entfernt: Fishing Buddy schaltet den Selbstbot jetzt selbst und nur bei Bedarf.";
+FishingTranslations["deDE"].CONFIG_AUTONOMOUNT_ONOFF = "Bot nicht aufsitzen lassen";
+FishingTranslations["deDE"].CONFIG_AUTONOMOUNT_INFO = "Ein Selbstbot mit Reittier steigt von selbst auf, und im Sattel kann niemand angeln. Schaltet die Bot-Strategie 'mount' w\195\164hrend des Angelns aus und danach wieder ein.";
+FishingTranslations["deDE"].CONFIG_AUTOHIDEECHO_ONOFF = "Bot-Fl\195\188stern im Chat ausblenden";
+FishingTranslations["deDE"].CONFIG_AUTOHIDEECHO_INFO = "Blendet die Fl\195\188sternachrichten aus, die Fishing Buddy an deinen eigenen Bot schickt, und die Antworten des Bots.";

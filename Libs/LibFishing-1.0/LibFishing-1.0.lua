@@ -1,4 +1,4 @@
-﻿--[[
+--[[
 Name: FishLib-1.0
 Author(s): Sutorix <sutorix@hotmail.com>
 Description: A library with common routines used by FishingBuddy and addons.

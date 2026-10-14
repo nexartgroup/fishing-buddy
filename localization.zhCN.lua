@@ -1,4 +1,4 @@
-﻿-- Translation for zhCN   by  biAji 
+-- Translation for zhCN   by  biAji 
 
 -- FishingTranslations = {};
 FishingTranslations["zhCN"] = {

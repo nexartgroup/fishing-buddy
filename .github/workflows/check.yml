@@ -1,0 +1,25 @@
+name: check
+
+# Statische Pruefung (Kodierung, TOC, Platzhalter), das Laden des AddOns in einer
+# WoW-Attrappe und die Zustandsfolge des Auto-Angelns gegen einen nachgebauten
+# Server (siehe tests/README.txt). Ersetzt keinen Test im Spiel.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lua 5.1 und luacheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1 liblua5.1-0-dev luarocks
+          sudo luarocks --lua-version=5.1 install luacheck
+
+      - name: Pruefen
+        run: tests/run.sh .

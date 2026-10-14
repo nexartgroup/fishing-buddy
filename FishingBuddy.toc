@@ -1,6 +1,6 @@
 ## Interface: 30300
 ## Title: Fishing Buddy
-## Version: 0.9.9-enhanced
+## Version: 0.9.10-enhanced
 ## Notes: Help with fishing related tasks -- clothing, fish information, playerbot auto fishing, session stats.
 ## Notes-deDE: Erleichtert das Angeln - Ausr\195\188stung, Fisch-Infos, Auto-Angeln (Playerbot) und Statistik
 ## Notes-frFR: Vous facilite la vie de pecheur. Informations sur les poissons, changement d'habits, etc.

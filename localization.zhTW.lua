@@ -1,4 +1,4 @@
-﻿-- Translation for zhTW   by Indra from Eastern.Stories an old old old TW mud. 06/20/2007
+-- Translation for zhTW   by Indra from Eastern.Stories an old old old TW mud. 06/20/2007
 -- 在下只翻譯了FishingBuddy 的部份.
 -- Outfitter 的部份留待能人接續, 個人習慣使用Itemrack
 -- Translation for zhTW , WOW version 2.3.0  Fish Buddy EBA0.9.3i  by Indra    

@@ -21,7 +21,7 @@
 	<GameTooltip name="FishingBuddyTooltip" frameStrata="TOOLTIP" hidden="true" inherits="GameTooltipTemplate">
 		<Scripts> 
 			<OnLoad> 
-				this:SetOwner(WorldFrame, "ANCHOR_NONE"); 
+				self:SetOwner(WorldFrame, "ANCHOR_NONE"); 
 			</OnLoad> 
 		</Scripts> 
 	</GameTooltip>
